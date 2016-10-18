@@ -3,8 +3,9 @@
 """
 
 g_svnUser= 'SVC_SVN_DBA' 
-g_svnPasswordEnvVar= 'SVN_PASSWORD' 
+g_svnPasswordEnvVar= 'NVS__XYZ' 
 g_svnAuth= None
+g_needCredentials= True
 
 def _line_():
 	return inspect.stack()[1][2]
@@ -21,14 +22,17 @@ def _errorExit ( text ):
 
 def svnQuery ( queryArgs = [], useShellFeatures = False ):
 	""" queryArgs only contains "action" such as path, recursive option, revision etc. 
-	The credentials are derived from global variables
+	The credentials are derived from global variables. Credentials are however not used
+	if the Url protocol is file://
 	""" 
 	global g_svnAuth
 
 	msgLines = []
 	errLines = []
 
-	cmdArgs = ['svn', '--non-interactive', '--no-auth-cache', '--username', g_svnUser, '--password', g_svnAuth ]
+	cmdArgs = ['svn', '--non-interactive', '--no-auth-cache']
+	if g_needCredentials:
+		cmdArgs.extend( [ '--username', g_svnUser, '--password', g_svnAuth ] )
 	for ix, arg in enumerate( queryArgs ):
 	 	# _dbx( "arg %d: %s" % (ix, arg) )
 		cmdArgs.append ( arg )
