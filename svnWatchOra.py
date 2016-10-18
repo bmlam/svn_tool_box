@@ -136,6 +136,9 @@ def parseCmdLine() :
 	parser.add_argument( '-O', '--primary_ora_user')
 	parser.add_argument( '-r', '--svn_target_url', help= "Target URL within the SVN repository to import/commit the scripts to")
 	parser.add_argument( '-t', '--tag_comment', help="a free text message that will be appended to the commit message for SVN check-in. " )
+	# long keywords only
+	parser.add_argument( '--repo_url1', help= "1st repository URL for diff" )
+	parser.add_argument( '--repo_url2', help= "2nd repository URL for diff" )
 
 	result= parser.parse_args()
 
@@ -241,8 +244,11 @@ def validateSettings ( argObject ):
 		printErrorIfValueNone ['secondary connect string'] = g_secondaryConnectString
 		printErrorIfValueNone ['primary oracle user'] = g_primaryOraUser
 		printErrorIfValueNone ['secondary oracle user'] = g_secondaryOraUser
-		printErrorIfValueNone ['mail recipient'] = argObject.mail_recipient
-	if argObject.action == 'checkin' :
+		# printErrorIfValueNone ['mail recipient'] = argObject.mail_recipient
+	elif argObject.action == 'diff-repo-repo' :
+		printErrorIfValueNone ['1st repo url'] = argObject.repo_url1
+		printErrorIfValueNone ['2nd repo url'] = argObject.repo_url2
+	elif argObject.action == 'checkin' :
 		printErrorIfValueNone ['primary connect string'] = g_primaryConnectString
 		printErrorIfValueNone ['primary oracle user'] = g_primaryOraUser
 		printErrorIfValueNone ['SVN target URL'] = argObject.svn_target_url
@@ -783,13 +789,11 @@ def performActionCheckin ( argObject, includeSchemas, includeObjectTypes) :
 
 	validateSettings( argObject )
 
-	# assert that the URL parent node exists
-	# _dbx( argObject.svn_target_url ); _errorExit( "test" )
 	nodeKind=  svnHelper.getUrlNodeKind( argObject.svn_target_url )
 	if nodeKind == None:
-		_exitError( "SVN URL: %s does not exist. Make sure it exists and is a directory" % argObject.svn_target_url )
+		_errorExit( "SVN URL: %s does not exist. Make sure it exists and is a directory" % argObject.svn_target_url )
 	elif nodeKind == 'file':
-		_exitError( "SVN URL: %s is a file! Make sure it is a directory" % argObject.svn_target_url )
+		_errorExit( "SVN URL: %s is a file! Make sure it is a directory" % argObject.svn_target_url )
 	
 	# ping the primary DB
 	_infoTs( 'Testing oracle DB connection to %s' % g_primaryConnectString, True )
@@ -806,11 +810,23 @@ def performActionCheckin ( argObject, includeSchemas, includeObjectTypes) :
 		, dbName= primaryDbName)
 
 	path4DbNameNode= composePath4DatabaseObject( rootPath= g_sandboxRoot, dbName= primaryDbName )[0]
-	_infoTs( "Importing tree \n\t%s\ninto target URL\n\t%s..." % ( path4DbNameNode, argObject.svn_target_url ) )
+	_infoTs( "Importing tree \n\t%s\ninto target URL\n\t%s ..." % ( g_sandboxRoot, argObject.svn_target_url ) )
 
 	checkInMessage= "Extraced at " + time.strftime("%Y.%m.%d %H:%M") 
-	svnHelper.svnQuery ( queryArgs = ['import', path4DbNameNode, argObject.svn_target_url, '-m', checkInMessage ] )
+	svnHelper.svnQuery ( queryArgs = ['import', g_sandboxRoot, argObject.svn_target_url, '-m', checkInMessage ] )
 
+
+def performActionDiffRepoRepo ( argObject, includeSchemas= None, includeObjectTypes= None ) :
+	""" export scripts from the given repo URL's and perform a diff on each file node
+	"""
+	validateSettings( argObject )
+
+	nodeKind1=  svnHelper.getUrlNodeKind( argObject.repo_url1 )
+	if nodeKind1 == None:
+		_errorExit( "SVN URL: %s does not exist. Make sure it exists and is a directory" % argObject.repo_url1 )
+	elif nodeKind1 == 'file':
+		_errorExit( "SVN URL: %s is a file! Make sure it is a directory" % argObject.repo_url1 )
+	
 def main():
 	global g_primaryOraPassword
 
@@ -827,6 +843,8 @@ def main():
 	os.makedirs( g_sandboxRoot ) # all actions will need this directory node
 	if argObject.action == 'diff-db-db':
 		performActionDiffDbDb( argObject= argObject, includeObjectTypes= includeObjectTypes, includeSchemas= includeSchemas )
+	elif argObject.action == 'diff-repo-repo':
+		performActionDiffRepoRepo( argObject= argObject )
 	elif argObject.action == 'checkin':
 		performActionCheckin( argObject= argObject, includeObjectTypes= includeObjectTypes, includeSchemas= includeSchemas )
 
