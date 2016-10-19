@@ -52,6 +52,7 @@ import difflib
 import getpass
 import inspect
 import os
+import shutil
 import subprocess
 import svnHelper
 import sys
@@ -62,7 +63,7 @@ g_revision = "$Revision: 27241 $"
 g_myBaseName = os.path.basename( sys.argv[0] )
 
 g_userHome= os.path.expanduser( '~' )
-g_sandboxRoot = "%s/%s_%s_%d" % ( g_userHome, g_myBaseName[0:8], time.strftime("%Y%m%d_%H%M%S") , os.getpid () )
+g_sandboxRoot = "%s/%s_%s_%d" % ( '/tmp', g_myBaseName[0:8], time.strftime("%Y%m%d_%H%M%S") , os.getpid () )
 g_queryDbName= "select dbms_standard.database_name n from dual;"
 
 g_spoolTargetMarker = '#+?Sp00lTargetMark3r:'
@@ -77,6 +78,8 @@ g_primaryConnectString= None
 g_secondaryOraPassword= None
 g_secondaryOraUser= None
 g_secondaryConnectString= None
+
+g_maxDiffLines= 100
 
 cfgParamKeyIncludeSchema        = 'INCLUDE_SCHEMA'
 cfgParamKeyIncludeObjectType    = 'INCLUDE_OBJECT_TYPE'
@@ -498,7 +501,6 @@ def saveLinesToTempFile ( msgLines ):
 		for line in msgLines: 
 			lno += 1
 			if line.rstrip() == line: # there is no endOfLine respectively newline
-				# if lno < 5: _dbx( line )
 				line = line + '\n'
 			fh.write( line )
 		fh.close()
@@ -602,7 +604,7 @@ def genUnixDiff ( oldPath, newPath, recursive= False ):
 	if len( errMsgs ) > 0 : # got error, return immediately
 		_errorExit( 'got error from diff. Only first 10 lines are shown:\n%s ' % '\n'.join( errMsgs [ 0: 10]  ) )
 
-	_dbx(  len( unixOutMsgs ) )
+	# _dbx(  len( unixOutMsgs ) )
 	return unixOutMsgs 
 
 def genDiffAndOverwriteOldFile ( oldFile, newFile ):
@@ -626,13 +628,10 @@ def genDiffAndOverwriteOldFile ( oldFile, newFile ):
 	svnOutMsgs, errMsgs= proc.communicate()
 
 	if len( errMsgs ) > 0 : # got error, return immediately
-		_dbx(  errMsgs.split( '\n' ) )
-		_errorExit( 'test exit' )
-		return errMsgs.split( '\n' )
+		_infoTs(  errMsgs.split( '\n' ) )
+		_errorExit( 'Aborted due to preceding errors' )
 	else: # note empty svn diff output is legal!
 		svnDiffSize = getTextSize( svnOutMsgs )
-		# _dbx( svnDiffSize )
-
 
 	if svnDiffSize <= unixDiffSize:
 		cmdString =  ' '.join( diffCmdArgsSvn )
@@ -642,6 +641,123 @@ def genDiffAndOverwriteOldFile ( oldFile, newFile ):
 		outputText = "\"%s\" produced the follwing output\n%s\n%s" % ( cmdString ,  '_' * 80 ,  unixOutMsg ) 
 	
 	return ( outputText .split( '\n' ) )
+
+def compareTwoTreesReturnFile( treeA, treeB, urlTreeA, urlTreeB, copyBFilesToAAndDiff = False ):
+	buddyFileMatches = []
+	diffOutputsByNode = {}
+	buddyADoesNotExist = []
+	buddyBDoesNotExist = []
+	buddyIsNotDir = []
+	buddyIsNotFile = []
+
+	diffOutputFile = tempfile.mktemp()
+	outputFH = open( diffOutputFile, 'w' )
+
+	# while walking tree A, we check if the buddy in B exists and has the same node kind.
+	# if both nodes exist and are a file, we also perform a diff.
+	for root, dirs, files in os.walk( treeA ):
+		for dir in dirs:
+			fullPathA = os.path.join( root, dir )
+			relPath = os.path.relpath( fullPathA, treeA )
+			if relPath.startswith( '.svn' ) or  relPath.endswith( '.svn' ) or  '/.svn/' in relPath :
+				None
+			else:
+				# _dbx( relPath )
+				fullPathB = os.path.join( treeB, relPath )
+				if os.path.isfile( fullPathB ):
+					buddyIsNotDir.append( relPath )
+				elif not os.path.exists( fullPathB ):
+					buddyBDoesNotExist.append( relPath )
+		# for "svn diff", we need to change to sandbox dir
+		if copyBFilesToAAndDiff:
+			os.chdir( treeA )
+		for file in files:
+			fullPathA = os.path.join( root, file )
+			relPath = os.path.relpath( fullPathA, treeA )
+			if relPath.startswith( '.svn' ) or  relPath.endswith( '.svn' ) or  '/.svn/' in relPath :
+				None
+			else:
+				fullPathB = os.path.join( treeB, relPath )
+				if os.path.isdir( fullPathB ):
+					buddyIsNotFile.append( relPath )
+				elif not os.path.exists( fullPathB ):
+					buddyBDoesNotExist.append( relPath )
+				elif os.path.isfile( fullPathB ):
+					if copyBFilesToAAndDiff:
+						shutil.copyfile( fullPathB, fullPathA )
+						svnRc, msgLines, errLinesFromSvn = svnHelper.svnQuery ( ['diff', relPath ] )
+						if svnRc != 0 :
+							_infoTs( "Function %s got error code %d from svn." % ( _func_(), svnRc ) )
+							if len( errLinesFromSvn ) > 0:
+								_infoTs( "Error output:" )
+								for errLine in errLinesFromSvn: print(  errLine )
+							_errorExit( 'aborting due to previous error' )
+					else:
+						msgLines= genUnixDiff( oldPath= fullPathA, newPath= fullPathB )
+						if len( msgLines ) == 0:
+							buddyFileMatches.append( relPath )
+						else:
+							diffOutputsByNode[ relPath ] = list( msgLines [ 0 : g_maxDiffLines - 1] )
+							# _dbx( relPath ); _dbx( type( diffOutputsByNode[ relPath ] ) )
+							if len( msgLines ) > g_maxDiffLines:
+								diffOutputsByNode[ relPath ].append( "\n... diff output contained %d lines. The rest has been suppressed " % len( msgLines ) )
+
+	# while walking tree B, we check only if any node in B does not have a buddy in A
+	for root, dirs, files in os.walk( treeB ):
+		for dir in dirs:
+			fullPathB = os.path.join( root, dir )
+			relPath = os.path.relpath( fullPathB, treeB )
+			if relPath.startswith( '.svn' ) or  relPath.endswith( '.svn' ) or  '/.svn/' in relPath :
+				None
+			else:
+				fullPathA = os.path.join( treeA, relPath )
+				if not os.path.exists( fullPathA ):
+					buddyADoesNotExist.append( relPath )
+		for file in files:
+			fullPathB = os.path.join( root, file )
+			relPath = os.path.relpath( fullPathB, treeB )
+			if relPath.startswith( '.svn' ) or  relPath.endswith( '.svn' ) or  '/.svn/' in relPath :
+				None
+			else:
+				fullPathA = os.path.join( treeA, relPath )
+				if not os.path.exists( fullPathA ):
+					buddyADoesNotExist.append( relPath )
+
+	if len( buddyFileMatches ) > 0:
+		outputFH.write("Following files match:\n" )
+		for relPath in buddyFileMatches: 
+			outputFH.write( '-> ' + relPath + "\n")
+
+	if len( buddyIsNotFile ) > 0:
+		outputFH.write("\nFollowing nodes exist as files in \n\t%s\nbut but the buddies are directories in \n\t%s:\n" % ( urlTreeA, urlTreeB ) )
+		for relPath in buddyIsNotFile: 
+			outputFH.write( '-> ' + relPath + "\n")
+
+	if len( buddyIsNotDir ) > 0:
+		outputFH.write("\nFollowing nodes exist as directories in \n\t%s\nbut but the buddies are files in \n\t%s:\n" % ( urlTreeA, urlTreeB ) )
+		for relPath in buddyIsNotDir: 
+			outputFH.write( '-> ' + relPath + "\n")
+
+	if len( buddyBDoesNotExist ) > 0:
+		outputFH.write("\nFollowing nodes exist in \n\t%s\nbut NOT in \n\t%s:\n" % ( urlTreeA, urlTreeB ) )
+		for relPath in buddyBDoesNotExist: 
+			outputFH.write( '-> ' + relPath + "\n")
+
+	if len( buddyADoesNotExist ) > 0:
+		outputFH.write("\nFollowing nodes exist in \n\t%s\nbut NOT in \n\t%s:\n" % ( urlTreeB, urlTreeA ) )
+		for relPath in buddyADoesNotExist: 
+			outputFH.write( '-> ' + relPath + "\n")
+
+	if len( diffOutputsByNode ) > 0:
+		for relPath, diffOutput in diffOutputsByNode.iteritems() : 
+			urlNodeA = os.path.join( urlTreeA, relPath )
+			urlNodeB = os.path.join( urlTreeB, relPath )
+			outputFH.write( "\n%s \nsvn_diff result on the following files:\n\t%s and \n\t%s\n%s\n" % ( '-'*80, urlNodeA, urlNodeB , '-'*80) )
+			outputFH.write( "".join( diffOutput )  + "\n" )
+
+	outputFH.close()
+
+	return diffOutputFile
 
 def diffTwoTexts( text1, text2 ):
 	file1= saveLinesToTempFile( text1 )
@@ -742,38 +858,42 @@ def performActionDiffDbDb ( argObject, includeSchemas, includeObjectTypes) :
 			,  oraUser= g_secondaryOraUser, oraPassword= g_secondaryOraPassword, connectString= g_secondaryConnectString \
 			, dbName= secondaryDbName)
 			
-	fileTreePrimaryAsString= chdirAndGetFindOutput( primarySandboxPath )
-	fileTreeSecondaryAsString= chdirAndGetFindOutput( secondarySandboxPath )
-
 	mailTextLines= []	
 
-	treeDelta= diffTwoTexts( fileTreePrimaryAsString, fileTreeSecondaryAsString )
-	_dbx( getTextSize( treeDelta ) )# ; _errorExit( "test" )
-	if treeDelta != None:
-		mailTextLines.append( """Comparison of the file trees
-	{tree1}	
-	{tree2}	
-yielded the following differences:
-********************** FILE TREE DIFFERENCE ***************************************
-""".format( tree1= primarySandboxPath, tree2= secondarySandboxPath ) )
-		mailTextLines.append( treeDelta )
-		mailTextLines.append( '**************  END OF FILE TREE DIFFERENCE ***************************************' )
+	if False: # the following branch should be retired in flavour of compareTwoTreesReturnFile
+		fileTreePrimaryAsString= chdirAndGetFindOutput( primarySandboxPath )
+		fileTreeSecondaryAsString= chdirAndGetFindOutput( secondarySandboxPath )
+		treeDelta= diffTwoTexts( fileTreePrimaryAsString, fileTreeSecondaryAsString )
+		_dbx( getTextSize( treeDelta ) )# ; _errorExit( "test" )
+		if treeDelta != None:
+			mailTextLines.append( """Comparison of the file trees
+		{tree1}	
+		{tree2}	
+		yielded the following differences:
+		********************** FILE TREE DIFFERENCE ***************************************
+		""".format( tree1= primarySandboxPath, tree2= secondarySandboxPath ) )
+			mailTextLines.append( treeDelta )
+			mailTextLines.append( '**************  END OF FILE TREE DIFFERENCE ***************************************' )
+	
+		if statusMsgPrimary   != None: mailTextLines.append( statusMsgPrimary )
+		if statusMsgSecondary != None: mailTextLines.append( statusMsgSecondary )
+	
+		diffOutputLines= genUnixDiff( oldPath= primarySandboxPath, newPath= secondarySandboxPath, recursive= True )
+		diffOutput= ''.join( diffOutputLines )
+		# tmpFile= saveStringToTempFile ( diffOutput ); _errorExit( "check output in %s" % tmpFile )
 
-	if statusMsgPrimary   != None: mailTextLines.append( statusMsgPrimary )
-	if statusMsgSecondary != None: mailTextLines.append( statusMsgSecondary )
+	diffTreeOutputFile= compareTwoTreesReturnFile( treeA= primarySandboxPath, treeB= secondarySandboxPath
+		, urlTreeA= primaryDbName, urlTreeB= secondaryDbName
+		, copyBFilesToAAndDiff = False )
 
-	diffOutputLines= genUnixDiff( oldPath= primarySandboxPath, newPath= secondarySandboxPath, recursive= True )
-	diffOutput= ''.join( diffOutputLines )
-	# tmpFile= saveStringToTempFile ( diffOutput ); _errorExit( "check output in %s" % tmpFile )
-
-	mailTextLines.append( diffOutput )
-	# _dbx( len( mailTextLines ) )
+	diffOutput= open( diffTreeOutputFile, 'r' ).readlines()
+	mailTextLines.extend( diffOutput )
 
 	textSize= getTextSize( mailTextLines )
 	if argObject.mail_recipient != None:
 		_infoTs( "Sending diff output to %s (text size: %d)" % ( argObject.mail_recipient, textSize) )
-		sendMimeText ( recipients= argObject.mail_recipient, subject= "Diff for specified objects, %s vs %s"
-			, asciiText= mailTextLines ) 
+		sendMimeText ( recipients= argObject.mail_recipient, subject= "Diff for specified database objects"
+			, asciiText= ''.join( mailTextLines ) )
 	else:
 		tempFile= saveLinesToTempFile( mailTextLines )
 		_infoTs( "diff output stored to %s (text size: %d)" % ( tempFile, textSize) )
@@ -788,6 +908,9 @@ def performActionCheckin ( argObject, includeSchemas, includeObjectTypes) :
 	g_primaryOraPassword   = getOraPassword( oraUser= g_primaryOraUser  , oraPasswordEnvVar= g_envVarNamePrimarySecret )
 
 	validateSettings( argObject )
+
+	if argObject.svn_target_url.startswith( 'file:///' ):  # file protocol needs no credentials?
+		svnHelper.g_needCredentials= False 
 
 	nodeKind=  svnHelper.getUrlNodeKind( argObject.svn_target_url )
 	if nodeKind == None:
@@ -818,8 +941,18 @@ def performActionCheckin ( argObject, includeSchemas, includeObjectTypes) :
 
 def performActionDiffRepoRepo ( argObject, includeSchemas= None, includeObjectTypes= None ) :
 	""" export scripts from the given repo URL's and perform a diff on each file node
+	Since we want to choose the "best" diff from both Unix and SVN diff, we need one file 
+	tree with SVN metadata (checkou) and one without (export). We do the unix diff first
+	between the sandboxed version and exported version. Then we overwrite the sandboxed version
+	with the exported version for a SVN diff.
 	"""
 	validateSettings( argObject )
+
+	if argObject.repo_url1 == argObject.repo_url2:
+		_errorExit( "repo_urlr1 and repo_url2 must not be identical!" )
+
+	if argObject.repo_url1.startswith( 'file:///' ) or argObject.repo_url1.startswith( 'file:///' ) :  # file protocol needs no credentials?
+		svnHelper.g_needCredentials= False 
 
 	nodeKind1=  svnHelper.getUrlNodeKind( argObject.repo_url1 )
 	if nodeKind1 == None:
@@ -827,10 +960,40 @@ def performActionDiffRepoRepo ( argObject, includeSchemas= None, includeObjectTy
 	elif nodeKind1 == 'file':
 		_errorExit( "SVN URL: %s is a file! Make sure it is a directory" % argObject.repo_url1 )
 	
+	nodeKind2=  svnHelper.getUrlNodeKind( argObject.repo_url2 )
+	if nodeKind2 == None:
+		_errorExit( "SVN URL: %s does not exist. Make sure it exists and is a directory" % argObject.repo_url2 )
+	elif nodeKind2 == 'file':
+		_errorExit( "SVN URL: %s is a file! Make sure it is a directory" % argObject.repo_url2 )
+	
+	repo1CheckedOutPath= svnHelper.checkoutToTempDir( argObject.repo_url1 )
+
+	tempDirMeaningfullName= g_myBaseName[0:8] + '_repo2' 
+	repo2ExportedPath= svnHelper.exportToTempDir( argObject.repo_url2 , tempDirMeaningfullName )
+	# _dbx( repo2ExportedPath )
+
+	diffTreeOutputFile= compareTwoTreesReturnFile( treeA= repo1CheckedOutPath, treeB= repo2ExportedPath
+		, urlTreeA= argObject.repo_url1, urlTreeB= argObject.repo_url2
+		, copyBFilesToAAndDiff = True )
+	_dbx( diffTreeOutputFile )
+
+	mailTextLines= []
+
+	diffOutput= open( diffTreeOutputFile, 'r' ).readlines()
+	mailTextLines.extend( diffOutput )
+
+	textSize= getTextSize( mailTextLines )
+	if argObject.mail_recipient != None:
+		_infoTs( "Sending diff output to %s (text size: %d)" % ( argObject.mail_recipient, textSize) )
+		sendMimeText ( recipients= argObject.mail_recipient, subject= "Diff for specified repository URLs"
+			, asciiText= ''.join( mailTextLines ) )
+	else:
+		tempFile= saveLinesToTempFile( mailTextLines )
+		_infoTs( "diff output stored to %s (text size: %d)" % ( tempFile, textSize) )
+
 def main():
 	global g_primaryOraPassword
 
-	svnHelper.g_needCredentials= False # during test we are using file://  protocol
 
 	startTime= time.strftime("%H:%M") 
 
