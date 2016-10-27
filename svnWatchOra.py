@@ -52,6 +52,7 @@ import difflib
 import getpass
 import glob
 import inspect
+import re
 import os
 import shutil
 import subprocess
@@ -60,12 +61,13 @@ import sys
 import tempfile
 import time
 
-g_revision = "$Revision: 27241 $"
+g_revision = "$Revision: 28066 $"
 g_myBaseName = os.path.basename( sys.argv[0] )
 
 g_userHome= os.path.expanduser( '~' )
 g_workAreaRoot = "%s/%s_%s_%d" % ( '/tmp', g_myBaseName[0:8], time.strftime("%Y%m%d_%H%M%S") , os.getpid () )
 g_queryDbName= "select dbms_standard.database_name n from dual;"
+g_useDbaView=None
 
 g_supportedObjectTypes= [ 
 	  'FUNCTION' 
@@ -140,6 +142,8 @@ def parseCmdLine() :
 	global g_secondaryConnectString
 	global g_secondaryOraUser
 
+	global g_useDbaViews
+
 	parser = argparse.ArgumentParser()
 	# lowercase shortkeys
 	parser.add_argument( '-a', '--action', help='which action applies', choices=['checkin', 'diff-db-db', 'diff-db-repo', 'diff-repo-repo' ], required= True)
@@ -153,14 +157,18 @@ def parseCmdLine() :
 	parser.add_argument( '-t', '--tag_comment', help="a free text message that will be appended to the commit message for SVN check-in. " )
 	parser.add_argument( '-u', '--svn_user', help= "Whenever access to SVN is required, specify the user name. The password will be prompted interactively or passed as environment variable. Provide dummies if credentials not strictly required" )
 	# long keywords only
+	parser.add_argument( '--batch_mode', dest='batch_mode', action='store_true', help= "Run in batch mode. Interactive prompts will be suppressed" )
+	parser.add_argument( '--keep_work_area', dest='keep_work_area', action='store_true', help= "Do not remove work area after run. This would be for diagnosis" )
 	parser.add_argument( '--repo_url1', help= "repository URL if a diff is requested against the database or another URL" )
 	parser.add_argument( '--repo_url2', help= "2nd repository URL for diff-repo-repo" )
 	parser.add_argument( '--use_dba_views', help= "Does the Oracle user have SELECT_CATALOG_ROLE or equivalent? If no, this program may only works for the schema which is the same as --primary_ora_user or --secondary_ora_user", choices=[ 'y', 'n'], default= 'y' )
 
+	parser.set_defaults( batch_mode= False)
+	parser.set_defaults( keep_work_area= False)
+
 	result= parser.parse_args()
 
 	# for (k, v) in vars( result ).iteritems () : print( "%s : %s" % (k, v) )
-	# _dbx( svnHelper.g_svnUser ) # _dbx( g_oraUser )
 
 	if result.primary_connect_string != None: 
 		g_primaryConnectString=  result.primary_connect_string
@@ -169,6 +177,8 @@ def parseCmdLine() :
 	if result.secondary_connect_string != None: 
 		g_secondaryConnectString=  result.secondary_connect_string
 	if result.secondary_ora_user != None: g_secondaryOraUser=  result.secondary_ora_user
+
+	g_useDbaViews = True if result.use_dba_views == 'y' else False
 
 	return result
 
@@ -247,7 +257,7 @@ def parseCfgFileAndSetGlobals( path ):
 	
 	return includeSchemas, includeObjectTypes
 
-def getOraPassword ( oraUser, oraPasswordEnvVar ):
+def getOraPassword ( oraUser, oraPasswordEnvVar, batchMode ):
 	"""Prompt for Oracle password if it is not found from environment variable. 
 	Password entered will be hidden.
 	"""
@@ -256,6 +266,8 @@ def getOraPassword ( oraUser, oraPasswordEnvVar ):
 		passwordEnv= os.environ[ oraPasswordEnvVar ]
 		if passwordEnv:
 			print('INFO: Found a value from the environment varable %s. Will use it if you just hit Enter on the password prompt' % oraPasswordEnvVar )
+			if batchMode:
+				return passwordEnv
 	else:
 		print('INFO: Password could be passed as environment variable %s however it is not set.' % oraPasswordEnvVar )
 	hiddenPassword = getpass.getpass('Enter password for Oracle user %s. (The input will be hidden if supported by the OS platform)' % oraUser )
@@ -328,11 +340,38 @@ def fuzzyNormalizeOutputMessages ( stream ):
 	return rc
 
 
-def composeConnectCommand( oraUser, oraPassword, connectString ) :
+def tokenizeProxyUserConnectUser( oraUserString ):
+	"""To connect via proxy user via SQLPLUS, the user name string is e.g. JOHNSON[SALES]
+	This method checks the user name string for occurrence of embracing square brackets 
+	at the right side of the string. If the pair of brackets is found, the value inside
+	is returned as connectUser, the left side is returned as proxyUser
+	"""
+	match = re.search( r"(.*)\[(.*)\]", oraUserString )
+	if match != None:
+		proxyUser= match.group( 1 )
+		connectUser= match.group( 2 )
+	else:
+		proxyUser= None
+		connectUser= oraUserString
+	return proxyUser, connectUser
+	
+def composeConnectCommand( oraUserString, oraPassword, connectString ) :
 	oraIdStandardChars = 'abcdefghijklmnopqrstuvwxyz_0123456789'
-	if containsForeignCharacters( inputString= oraUser.lower(), localCharacters= oraIdStandardChars ):
-		oraUser= '"' + oraUser + '"'
-	connectCommand = 'connect {oraUser}/"{password}"@{connectString}'.format( oraUser= oraUser, password= oraPassword, connectString= connectString )
+
+	proxyUser, connectUser= tokenizeProxyUserConnectUser( oraUserString )
+
+	if containsForeignCharacters( inputString= connectUser.lower(), localCharacters= oraIdStandardChars ):
+		connectUser= '"' + connectUser + '"'
+
+	if proxyUser == None:
+		connectCommand = 'connect {connectUser}/"{password}"@{connectString}'.format( connectUser= connectUser, password= oraPassword, connectString= connectString )
+	else:
+		if containsForeignCharacters( inputString= proxyUser.lower(), localCharacters= oraIdStandardChars ):
+			proxyUser= '"' + proxyUser + '"'
+		connectCommand = 'connect {proxyUser}[{connectUser}]/"{password}"@{connectString}'.format( connectUser= connectUser
+			, proxyUser= proxyUser
+			, password= oraPassword
+			, connectString= connectString )
 
 	return connectCommand
 	
@@ -440,7 +479,7 @@ def composePath4DatabaseObject( rootPath, dbName, schema= None, objectType= None
 
 	return fullPath, dirPath
 
-def composeSpoolScripts4ObjectType( oraUser, oraPassword, connectString, dbName, schema, objectType, hasSelectCatalogPrivs= True ):
+def composeSpoolScripts4ObjectType( oraUser, oraPassword, connectString, dbName, schema, objectType):
 	"""Query the Oracle DB dictionary to generated SELECT DBMS_META.GET_DDL queries.
 	Also wrap each query within proper spooling commands so that the extracted code 
 	is stored at the intended locatioan such as /tmp/crmdb/sales_data/tables/sales_region.sql
@@ -452,7 +491,7 @@ def composeSpoolScripts4ObjectType( oraUser, oraPassword, connectString, dbName,
 	entityDelim = '<#314Del1m$>'
 	condensedObjectType= objectType #fixme
 
-	objectsView = 'dba_objects' if hasSelectCatalogPrivs else 'all_objects'
+	objectsView = 'dba_objects' if g_useDbaViews else 'all_objects'
 	queryGenGetDdl = """
 with my_objs as (
     select object_name
@@ -491,7 +530,10 @@ with my_objs as (
 	markerLen= len( g_spoolTargetMarker )
 	cntObject= 0
 	for i, line in enumerate( getDdlCodeBlocks ):
-		if line.startswith( g_spoolTargetMarker ):
+		if line.startswith( 'ORA-' ):
+			_infoTs( 'Found error whiling checking DDL extraction command: --> %s' % line ) 
+			_errorExit( 'Exit due to previous error' )
+		elif line.startswith( g_spoolTargetMarker ):
 			payload= line[ markerLen : ]
 			schema, objectType, objectName= payload.split( entityDelim )
 			fullPath, dirPath=  composePath4DatabaseObject( rootPath= g_workAreaRoot
@@ -719,8 +761,7 @@ def compareTwoTreesReturnFile( treeA, treeB, expressiveNameA, expressiveNameB, c
 	buddyIsNotDir = []
 	buddyIsNotFile = []
 
-	_dbx( "path A: %s, expressiveName: %s" % ( treeA, expressiveNameA) )
-	_dbx( "path B: %s, expressiveName: %s" % ( treeB, expressiveNameB) )
+	_infoTs( "Comparing two trees:\n  A: '%s', expressiveName: '%s'\n  B: '%s' expressiveName: '%s' " % ( treeA, expressiveNameA, treeB, expressiveNameB ) ) 
 
 	diffOutputFile = tempfile.mktemp()
 	outputFH = open( diffOutputFile, 'w' )
@@ -917,8 +958,10 @@ def performActionDiffDbDb ( argObject, includeSchemas, includeObjectTypes) :
 
 	validateSettings( argObject )
 
-	g_primaryOraPassword   = getOraPassword( oraUser= g_primaryOraUser  , oraPasswordEnvVar= g_envVarNamePrimarySecret )
-	g_secondaryOraPassword = getOraPassword( oraUser= g_secondaryOraUser, oraPasswordEnvVar= g_envVarNameSecondarySecret )
+	g_primaryOraPassword   = getOraPassword( oraUser= g_primaryOraUser  , oraPasswordEnvVar= g_envVarNamePrimarySecret
+		, batchMode= argObject.batch_mode )
+	g_secondaryOraPassword = getOraPassword( oraUser= g_secondaryOraUser, oraPasswordEnvVar= g_envVarNameSecondarySecret
+		, batchMode= argObject.batch_mode )
 
 	# ping the primary DB
 	_infoTs( 'Testing oracle DB connection to %s' % g_primaryConnectString, True )
@@ -1080,32 +1123,55 @@ def mergeTreeWithDeleteCheck ( sourceTree, targetTree, deleteCheckObjectTypes ):
 
 				continue
 
-			fullDirPathB = os.path.join( root, dir )
-			relPath = os.path.relpath( fullDirPathB, targetTree )
+			fullDirPathSandbox = os.path.join( root, dir )
+			relPath = os.path.relpath( fullDirPathSandbox, targetTree )
 
-			fullDirPathA = os.path.join( sourceTree, relPath )
-			if not os.path.exists( fullDirPathA ):
-				# _dbx( "fullDirPathA does not exist: %s" % fullDirPathA )
-				assertSvnSubDir( parentPath= fullDirPathB, subDir= trashDirFixName )
-				localSvnMove( sandboxPath= fullDirPathB, sourceNode= dir, targetNode= trashDirFixName )
+			fullDirPathExtract = os.path.join( sourceTree, relPath )
+			if not os.path.exists( fullDirPathExtract ):
+				# _dbx( "fullDirPathExtract does not exist: %s" % fullDirPathExtract )
+				assertSvnSubDir( parentPath= fullDirPathSandbox, subDir= trashDirFixName )
+				localSvnMove( sandboxPath= fullDirPathSandbox, sourceNode= dir, targetNode= trashDirFixName )
 
 		for file in files:
 			if file == trashDirFixName:
-				_errorExit( "Invalid structure detected. '%s' exists as file node in '%s'!" % ( trashDirFixName, fullFilePathB ) )
+				_errorExit( "Invalid structure detected. '%s' exists as file node in '%s'!" % ( trashDirFixName, fullFilePathSandbox ) )
 			else:
-				fullFilePathB = os.path.join( root, file )
-				relPath = os.path.relpath( fullFilePathB, targetTree )
-				fullFilePathA = os.path.join( sourceTree, relPath )
-				fileExists= os.path.isfile( fullFilePathA )
-				# _dbx( fullFilePathA + ' exists in extracted tree?' );  _dbx( fileExists )	
+				fullFilePathSandbox = os.path.join( root, file )
+				relPath = os.path.relpath( fullFilePathSandbox, targetTree )
+				fullFilePathExtract = os.path.join( sourceTree, relPath )
+				fileExists= os.path.isfile( fullFilePathExtract )
+				# _dbx( fullFilePathExtract + ' exists in extracted tree?' );  _dbx( fileExists )	
 				if fileExists:
 					None # this may well be our copy from source tree
-				elif os.path.isdir( fullFilePathA ):
+				elif os.path.isdir( fullFilePathExtract ):
 					_errorExit( "Node '%s' is a file in '%s' but a directory in '%s'!" % ( relPath, targetTree, sourceTree ) )
 				else :
-					fullDirPathB= os.path.split( fullFilePathB )[0]
-					assertSvnSubDir( parentPath= fullDirPathB, subDir= trashDirFixName )
-					localSvnMove( sandboxPath= fullDirPathB, sourceNode= file, targetNode= trashDirFixName )
+					fullDirPathSandbox= os.path.split( fullFilePathSandbox )[0]
+					trashbinDir= assertSvnSubDir( parentPath= fullDirPathSandbox, subDir= trashDirFixName )
+					_dbx( "trashbinDir: " + trashbinDir )
+					trashbinFileNode= os.path.join( trashbinDir, file )
+					if os.path.isfile( trashbinFileNode ):
+						localSvnDelete( trashbinFileNode )
+					else:
+						localSvnMove( sandboxPath= fullDirPathSandbox, sourceNode= file, targetNode= trashDirFixName )
+
+def  localSvnDelete( node ):
+	""" need to do this for example we want to move an object into _trashbin but that object 
+	is already present there. In this case it is ok to svn delete it (without commit) yet
+	and do the actual svn move
+	"""
+	# _dbx( node )
+
+	parentPath = os.path.split( node ) [0]
+	savedWorkDir = os.getcwd(); os.chdir( parentPath )
+
+	svnCmdArgs= ['delete',  node]
+	rc, msgLines, errLines = svnHelper.svnQuery ( queryArgs= svnCmdArgs )
+	if msgLines != None: 
+		_infoTs ( "Output from svn DELETE:\n%s" % ''.join( msgLines ) )
+	if errLines != None and len( errLines ) > 0 : 
+		_infoTs( ''.join( errLines ) )
+		_errorExit( "svn DELETE failed due to previous issues" )
 
 def  localSvnMove( sandboxPath, sourceNode, targetNode ):
 	"""chdir to sandboxPath and schedules a add + delete (move)
@@ -1121,7 +1187,7 @@ def  localSvnMove( sandboxPath, sourceNode, targetNode ):
 		_infoTs ( "Output from svn MOVE:\n%s" % ''.join( msgLines ) )
 	if errLines != None and len( errLines ) > 0 : 
 		_infoTs( ''.join( errLines ) )
-		_errorExit( "svn checkin failed due to previous issues" )
+		_errorExit( "svn MOVE failed due to previous issues" )
 
 	os.chdir( savedWorkDir )
 
@@ -1143,10 +1209,12 @@ def  assertSvnSubDir( parentPath, subDir ):
 			_errorExit( "svn checkin failed due to previous issues" )
 
 	os.chdir( savedWorkDir )
+	return os.path.join(  parentPath, subDir )
 
-def promptAndSetSvnPasswor( svnUser ):
+def promptAndSetSvnPasswor( svnUser, batchMode ):
+	_dbx( "batch_mode" if batchMode else "interactive" )
 	svnHelper.g_svnUser= svnUser
-	secret= svnHelper.getSvnPassword( svnUser )
+	secret= svnHelper.getSvnPassword( svnUser, batchMode= batchMode )
 	svnHelper.g_svnAuth= secret
 
 def forceCopyTree ( src, dst ):
@@ -1167,9 +1235,10 @@ def performActionDiffDbRepo ( argObject, includeSchemas, includeObjectTypes) :
 	if argObject.repo_url1.startswith( 'file:///' ) : # file protocol needs no credentials?
 		svnHelper.g_needCredentials= False 
 	else: 
-		promptAndSetSvnPasswor (argObject.svn_user)
+		promptAndSetSvnPasswor (argObject.svn_user, batchMode= argObject.batch_mode)
 
-	g_primaryOraPassword   = getOraPassword( oraUser= g_primaryOraUser  , oraPasswordEnvVar= g_envVarNamePrimarySecret )
+	g_primaryOraPassword   = getOraPassword( oraUser= g_primaryOraUser  , oraPasswordEnvVar= g_envVarNamePrimarySecret
+		, batchMode= argObject.batch_mode )
 
 	# ping the primary DB
 	_infoTs( 'Testing oracle DB connection to %s' % g_primaryConnectString, True )
@@ -1198,7 +1267,7 @@ def performActionDiffDbRepo ( argObject, includeSchemas, includeObjectTypes) :
 			, schema= schema )[0]
 		relevantDbSchemaUrls.append( schemaUrl )
 		
-	_dbx( "Urls: \n%s" % "\n".join( relevantDbSchemaUrls ) )
+	#_dbx( "Urls: \n%s" % "\n".join( relevantDbSchemaUrls ) )
 
 	for i, schema in enumerate( includeSchemas ):
 		workAreaSchemaPath= composePath4DatabaseObject(  rootPath= g_workAreaRoot, dbName= dbName, schema= schema )[0]
@@ -1210,7 +1279,7 @@ def performActionDiffDbRepo ( argObject, includeSchemas, includeObjectTypes) :
 		parentNodeName= os.path.basename( schemaUrl )
 		tempDir= tempfile.mkdtemp()
 		svnPathCorrected = os.path.join( tempDir , parentNodeName )
-		_dbx( svnPathCorrected )
+		# _dbx( svnPathCorrected )
 		shutil.move( svnSandbox, svnPathCorrected )
 		
 		diffTreeOutputFile= compareTwoTreesReturnFile( treeA= svnPathCorrected, treeB= workAreaSchemaPath
@@ -1261,14 +1330,15 @@ def performActionCheckin ( argObject, includeSchemas, includeObjectTypes) :
 	"""
 	global g_primaryOraPassword
 
-	g_primaryOraPassword   = getOraPassword( oraUser= g_primaryOraUser  , oraPasswordEnvVar= g_envVarNamePrimarySecret )
+	g_primaryOraPassword   = getOraPassword( oraUser= g_primaryOraUser  , oraPasswordEnvVar= g_envVarNamePrimarySecret 
+		, batchMode= argObject.batch_mode )
 
 	validateSettings( argObject )
 
 	if argObject.checkin_target_url.startswith( 'file:///' ):  # file protocol needs no credentials?
 		svnHelper.g_needCredentials= False 
 	else: 
-		promptAndSetSvnPasswor (argObject.svn_user)
+		promptAndSetSvnPasswor (argObject.svn_user, batchMode= argObject.batch_mode)
 
 	nodeKind=  svnHelper.getUrlNodeKind( argObject.checkin_target_url )
 	_dbx( nodeKind )
@@ -1406,7 +1476,7 @@ def performActionDiffRepoRepo ( argObject, includeSchemas= None, includeObjectTy
 	diffTreeOutputFile= compareTwoTreesReturnFile( treeA= repo1CheckedOutPath, treeB= repo2ExportedPath
 		, expressiveNameA= argObject.repo_url1, expressiveNameB= argObject.repo_url2
 		, copyBFilesToAAndDiff = True )
-	_dbx( diffTreeOutputFile )
+	#_dbx( diffTreeOutputFile )
 
 	mailTextLines= []
 
@@ -1426,7 +1496,7 @@ def main():
 	global g_primaryOraPassword
 
 
-	startTime= time.strftime("%H:%M") 
+	startTime= time.strftime("%H:%M:%S") 
 
 	argObject= parseCmdLine()
 	includeSchemas, includeObjectTypes= parseCfgFileAndSetGlobals( argObject.config_file )
@@ -1447,7 +1517,11 @@ def main():
 	else:
 		_errorExit( "Action %s is not yet implemented" % ( argObject.action ) )
 
-	_infoTs( "Check tree beneath %s" % g_workAreaRoot )
+	if argObject.keep_work_area:
+		_infoTs( "Check tree beneath %s" % g_workAreaRoot )
+	else:
+		shutil.rmtree( g_workAreaRoot )
+
 	_infoTs( "Reach normal end of Program %s (started at %s)" % ( os.path.basename( sys.argv[0] ), startTime ) , True )
 
 if __name__ == "__main__":

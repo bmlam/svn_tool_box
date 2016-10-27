@@ -175,19 +175,23 @@ def extractRepoRootUrl ( anySvnNodeUrl ):
 	return rootUrl.rstrip()
 	
 
-def getSvnPassword ( svnUser ):
+def getSvnPassword( svnUser , batchMode= False):
 	"""Prompt for SVN password if it is not found from environment variable. 
 	Password entered will be hidden.
 	"""
+	_dbx( g_svnPasswordEnvVar )
 	if g_svnPasswordEnvVar in os.environ:
 		passwordEnv= os.environ[ g_svnPasswordEnvVar ]
 		if passwordEnv:
 			print('INFO: Found a value from the environment varable %s. Will use it if you just hit Enter on the password prompt' % g_svnPasswordEnvVar )
-	hiddenPassword = getpass.getpass('Enter password for SVN user %s. (The input will be hidden if supported by the OS platform)' % svnUser)
-	if hiddenPassword == "" :
-		if passwordEnv:
-			hiddenPassword= passwordEnv
-	return hiddenPassword
+			if batchMode:
+				return passwordEnv
+	if not batchMode:
+		hiddenPassword = getpass.getpass('Enter password for SVN user %s. (The input will be hidden if supported by the OS platform)' % svnUser)
+		if hiddenPassword == "" :
+			if passwordEnv:
+				hiddenPassword= passwordEnv
+		return hiddenPassword
 
 def getUrlNodeKind ( url ):
 	"""Check if the node already exists in the repository, if no return None as the first return value
