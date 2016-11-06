@@ -162,6 +162,7 @@ def parseCmdLine() :
 	parser.add_argument( '--repo_url1', help= "repository URL if a diff is requested against the database or another URL" )
 	parser.add_argument( '--repo_url2', help= "2nd repository URL for diff-repo-repo" )
 	parser.add_argument( '--use_dba_views', help= "Does the Oracle user have SELECT_CATALOG_ROLE or equivalent? If no, this program may only works for the schema which is the same as --primary_ora_user or --secondary_ora_user", choices=[ 'y', 'n'], default= 'y' )
+	parser.add_argument( '--use_default_svn_auth', help= "Do not prompt for SVN authentication" , choices=[ 'y', 'n'], default= 'n' )
 
 	parser.set_defaults( batch_mode= False)
 	parser.set_defaults( keep_work_area= False)
@@ -277,6 +278,7 @@ def getOraPassword ( oraUser, oraPasswordEnvVar, batchMode ):
 	return hiddenPassword
 
 def validateSettings ( argObject ):
+	checkSvnUser = False if argObject.use_default_svn_auth else True
 
 	printErrorIfValueNone = {}
 
@@ -290,7 +292,7 @@ def validateSettings ( argObject ):
 		printErrorIfValueNone ['primary connect string'] = g_primaryConnectString
 		printErrorIfValueNone ['primary oracle user'] = g_primaryOraUser
 		printErrorIfValueNone ['repo url1'] = argObject.repo_url1
-		printErrorIfValueNone ['SVN user'] = argObject.svn_user
+		if checkSvnUser: printErrorIfValueNone ['SVN user'] = argObject.svn_user
 	elif argObject.action == 'diff-repo-repo' :
 		printErrorIfValueNone ['1st repo url'] = argObject.repo_url1
 		printErrorIfValueNone ['2nd repo url'] = argObject.repo_url2
@@ -299,7 +301,7 @@ def validateSettings ( argObject ):
 		printErrorIfValueNone ['primary connect string'] = g_primaryConnectString
 		printErrorIfValueNone ['primary oracle user'] = g_primaryOraUser
 		printErrorIfValueNone ['SVN target URL'] = argObject.checkin_target_url
-		printErrorIfValueNone ['SVN user'] = argObject.svn_user
+		if checkSvnUser: printErrorIfValueNone ['SVN user'] = argObject.svn_user
 	else:
 		_errorExit( "Check is not yet implemented for action %s!" % argObject.action )
 		
@@ -329,9 +331,12 @@ def fuzzyNormalizeOutputMessages ( stream ):
 	yes, we join the complete list with ''. Then split on newline.
 	"""
 	rc = []
-	if len( stream ) > 3:
-		line1, line2, line3, line4 = stream[0:4]
-		if len( line1 ) == 1 and len( line2 ) == 1 and len( line3 ) == 1 and len( line4 ) == 1:
+	""" we used to check 4 lines, but in case the query is to retrieve the database name 
+	and the result is XE, we will have only 2 lines
+	"""
+	if len( stream ) > 1:
+		line1, line2 = stream[0:2]
+		if len( line1 ) == 1 and len( line2 ) == 1 :
 			temp = ''.join( stream )
 			# _dbx( temp )
 			rc = temp.split( '\n' )
@@ -1335,7 +1340,7 @@ def performActionCheckin ( argObject, includeSchemas, includeObjectTypes) :
 
 	validateSettings( argObject )
 
-	if argObject.checkin_target_url.startswith( 'file:///' ):  # file protocol needs no credentials?
+	if argObject.checkin_target_url.startswith( 'file:///' ) or argObject.use_default_svn_auth == 'y' :  # file protocol needs no credentials?
 		svnHelper.g_needCredentials= False 
 	else: 
 		promptAndSetSvnPasswor (argObject.svn_user, batchMode= argObject.batch_mode)
@@ -1494,7 +1499,6 @@ def performActionDiffRepoRepo ( argObject, includeSchemas= None, includeObjectTy
 
 def main():
 	global g_primaryOraPassword
-
 
 	startTime= time.strftime("%H:%M:%S") 
 
