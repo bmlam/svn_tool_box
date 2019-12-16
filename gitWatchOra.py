@@ -47,7 +47,7 @@ INCLUDE_OBJECT_TYPES
 
 Below is an examplary command to extract the specified objects and check the result into GIT:
 
-./gitWatchOra.py -a checkin -f my_input.txt -O IOS_APP_DATA -D sfwbe_2_xe -u dummySvnUser --keep_work_area --use_default_svn_auth y -r $HOME/testGitRepo
+./gitWatchOra.py -a checkin -f my_input.txt -O IOS_APP_DATA -D 217.160.60.203:1521:xepdb1 -u dummySvnUser --keep_work_area --use_default_svn_auth y -r $HOME/testGitRepo
 
 """
 
@@ -374,14 +374,16 @@ def composeConnectCommand( oraUserString, oraPassword, hostPortServiceName ) :
 	
 	host, port, serviceName = hostPortServiceName.split(":")
 	_dbx( host ); _dbx( serviceName)
-	connectString = "\(DESCRIPTION=\(ADDRESS_LIST=\(ADDRESS=\(PROTOCOL=TCP\)\(HOST=(host)\)\(PORT=(port)\)\)\)\(CONNECT_DATA=\(SERVER=DEDICATED\)\(SERVICE_NAME=(serviceName)\)\)\)".format( host= host, port= port, serviceName= serviceName )
+	# connectString = "\(DESCRIPTION=\(ADDRESS_LIST=\(ADDRESS=\(PROTOCOL=TCP\)\(HOST=(host)\)\(PORT=(port)\)\)\)\(CONNECT_DATA=\(SERVER=DEDICATED\)\(SERVICE_NAME=(serviceName)\)\)\)".format( host= host, port= port, serviceName= serviceName )
+	connectString = "(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST={host})(PORT={port})))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME={serviceName})))".format( host= host, port= port, serviceName= serviceName )
 	_dbx( connectString )
-	
+  # E.G: (DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=217.160.60.203)(PORT=1521)))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=xepdb1)))
+
 	proxyUser, connectUser= tokenizeProxyUserConnectUser( oraUserString )
 
 	if containsForeignCharacters( inputString= connectUser.lower(), localCharacters= oraIdStandardChars ):
 		connectUser= '"' + connectUser + '"'
-
+	_dbx( oraPassword )
 	if proxyUser == None:
 		connectCommand = 'connect {connectUser}/"{password}"@{connectString}'.format( connectUser= connectUser, password= oraPassword, connectString= connectString )
 	else:
