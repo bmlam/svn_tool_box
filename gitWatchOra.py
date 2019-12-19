@@ -47,7 +47,7 @@ INCLUDE_OBJECT_TYPES
 
 Below is an examplary command to extract the specified objects and check the result into GIT:
 
-./gitWatchOra.py -a checkin -f my_input.txt -O IOS_APP_DATA -D 217.160.60.203:1521:xepdb1 -u dummySvnUser --keep_work_area --use_default_svn_auth y -r $HOME/testGitRepo
+./gitWatchOra.py -a checkin -f my_input.txt -O IOS_APP_DATA -D 217.160.60.203:1521:xepdb1 -u dummySvnUser --keep_work_area --use_default_svn_auth y -r $HOME/testGitRepo --use_dba_views n
 
 """
 
@@ -188,6 +188,9 @@ def parseCmdLine() :
 	return result
 
 def parseCfgFileAndSetGlobals( path ):
+	""" config file example:
+INCLUDE_SCHEMA::SCOTT
+	"""
 	global g_primaryConnectString
 	global g_primaryOraUser
 	global g_secondaryConnectString
@@ -1524,7 +1527,7 @@ def main():
 	argObject= parseCmdLine()
 	includeSchemas, includeObjectTypes= parseCfgFileAndSetGlobals( argObject.config_file )
 	
-	# _dbx( " ,".join( includeSchemas ) ); _dbx( " ,".join( includeObjectTypes ) )
+	_dbx( " ,".join( includeSchemas ) ); _dbx( " ,".join( includeObjectTypes ) )
 	_infoTs( "*" * 10 + "%s started. Program version: ?\n" % ( os.path.basename( sys.argv[0] ) ), True )
 
 	os.makedirs( g_workAreaRoot ) # all actions will need this directory node
