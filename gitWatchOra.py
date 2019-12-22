@@ -47,7 +47,7 @@ INCLUDE_OBJECT_TYPES
 
 Below is an examplary command to extract the specified objects and check the result into GIT:
 
-./gitWatchOra.py -a checkin -f my_input.txt -O IOS_APP_DATA -D 217.160.60.203:1521:xepdb1 -u dummySvnUser --keep_work_area --use_default_svn_auth y -r $HOME/testGitRepo --use_dba_views n
+./gitWatchOra.py -a extract -f my_input.txt -O IOS_APP_DATA -D 217.160.60.203:1521:xepdb1 -u dummySvnUser --keep_work_area --use_default_svn_auth y -r $HOME/testGitRepo --use_dba_views n
 
 """
 
@@ -65,7 +65,6 @@ import sys
 import tempfile
 import time
 
-g_revision = "$Revision: 28066 $"
 g_myBaseName = os.path.basename( sys.argv[0] )
 
 g_userHome= os.path.expanduser( '~' )
@@ -150,7 +149,7 @@ def parseCmdLine() :
 
 	parser = argparse.ArgumentParser()
 	# lowercase shortkeys
-	parser.add_argument( '-a', '--action', help='which action applies', choices=['checkin', 'diff-db-db', 'diff-db-repo', 'diff-repo-repo', 'extract-as-zip' ], required= True)
+	parser.add_argument( '-a', '--action', help='which action applies', choices=[ 'diff-db-db', 'diff-db-repo', 'diff-repo-repo', 'extract' ], required= True)
 	parser.add_argument( '-f', '--config_file' , help='Read configuration from this file', required= True )
 	parser.add_argument( '-m', '--mail_recipient' , help="recipient of diff ouptut" )
 	parser.add_argument( '-d', '--secondary_connect_string', help='Oracle connect string to the secondary Database to extract scripts from' )
@@ -304,9 +303,10 @@ def validateSettings ( argObject ):
 		printErrorIfValueNone ['1st repo url'] = argObject.repo_url1
 		printErrorIfValueNone ['2nd repo url'] = argObject.repo_url2
 		printErrorIfValueNone ['GIT user'] = argObject.svn_user
-	elif argObject.action == 'checkin' :
+	elif argObject.action == 'extract' :
 		printErrorIfValueNone ['primary connect string'] = g_primaryConnectString
 		printErrorIfValueNone ['primary oracle user'] = g_primaryOraUser
+
 		printErrorIfValueNone ['GIT target URL'] = argObject.checkin_target_url
 		if checkSvnUser: printErrorIfValueNone ['GIT user'] = argObject.svn_user
 	else:
@@ -331,316 +331,6 @@ def containsForeignCharacters( inputString, localCharacters ):
 	
 	return False
 
-def fuzzyNormalizeOutputMessages ( stream ):
-	"""subprocess returns an outputstream which appends a new line after each single character. 
-	To be able to interpret the output message in a sensible way, we need to convert this 
-	stream back to "normal". We check if the first N lines are indeed one character long. If
-	yes, we join the complete list with ''. Then split on newline.
-	"""
-	rc = []
-	""" we used to check 4 lines, but in case the query is to retrieve the database name 
-	and the result is XE, we will have only 2 lines
-	"""
-	if len( stream ) > 1:
-		line1, line2 = stream[0:2]
-		if len( line1 ) == 1 and len( line2 ) == 1 :
-			temp = ''.join( stream )
-			# _dbx( temp )
-			rc = temp.split( '\n' )
-	else:
-		rc = stream # no conversion 
-	return rc
-
-
-def tokenizeProxyUserConnectUser( oraUserString ):
-	"""To connect via proxy user via SQLPLUS, the user name string is e.g. JOHNSON[SALES]
-	This method checks the user name string for occurrence of embracing square brackets 
-	at the right side of the string. If the pair of brackets is found, the value inside
-	is returned as connectUser, the left side is returned as proxyUser
-	"""
-	match = re.search( r"(.*)\[(.*)\]", oraUserString )
-	if match != None:
-		proxyUser= match.group( 1 )
-		connectUser= match.group( 2 )
-	else:
-		proxyUser= None
-		connectUser= oraUserString
-	return proxyUser, connectUser
-	
-def composeConnectCommand( oraUserString, oraPassword, hostPortServiceName ) :
-	""" hostPortServiceName is given as host:port:serviceName
-	example connect string without TNSNAMEE.ORA: 
-	(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=localhost.localdomain)(PORT=1521)))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=ora9ir2.kyte.com)))
-	"""
-	
-	oraIdStandardChars = 'abcdefghijklmnopqrstuvwxyz_0123456789'
-	
-	host, port, serviceName = hostPortServiceName.split(":")
-	_dbx( host ); _dbx( serviceName)
-	# connectString = "\(DESCRIPTION=\(ADDRESS_LIST=\(ADDRESS=\(PROTOCOL=TCP\)\(HOST=(host)\)\(PORT=(port)\)\)\)\(CONNECT_DATA=\(SERVER=DEDICATED\)\(SERVICE_NAME=(serviceName)\)\)\)".format( host= host, port= port, serviceName= serviceName )
-	connectString = "(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST={host})(PORT={port})))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME={serviceName})))".format( host= host, port= port, serviceName= serviceName )
-	_dbx( connectString )
-  # E.G: (DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=217.160.60.203)(PORT=1521)))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=xepdb1)))
-
-	proxyUser, connectUser= tokenizeProxyUserConnectUser( oraUserString )
-
-	if containsForeignCharacters( inputString= connectUser.lower(), localCharacters= oraIdStandardChars ):
-		connectUser= '"' + connectUser + '"'
-	_dbx( oraPassword )
-	if proxyUser == None:
-		connectCommand = 'connect {connectUser}/"{password}"@{connectString}'.format( connectUser= connectUser, password= oraPassword, connectString= connectString )
-	else:
-		if containsForeignCharacters( inputString= proxyUser.lower(), localCharacters= oraIdStandardChars ):
-			proxyUser= '"' + proxyUser + '"'
-		connectCommand = 'connect {proxyUser}[{connectUser}]/"{password}"@{connectString}'.format( connectUser= connectUser
-			, proxyUser= proxyUser
-			, password= oraPassword
-			, connectString= connectString )
-
-	return connectCommand
-	
-def testOracleConnect( oraUser, oraPassword, connectString ) :
-	connectCommand=  composeConnectCommand( oraUser, oraPassword, connectString ) 
-	# _dbx( connectCommand )
-	proc= subprocess.Popen( ['sqlplus', '-s', '/nolog'] ,stdin=subprocess.PIPE ,stdout=subprocess.PIPE ,stderr=subprocess.PIPE)
-	msgLines, errLines= proc.communicate( connectCommand )
-	if len( msgLines ) > 0 or len( errLines ) > 0 :
-		print( sys.stderr, ''.join( msgLines ) )
-		print( sys.stderr, ''.join( errLines  ) )
-
-		_errorExit( "Oracle test connect on %s@%s failed! Check the credentials" % ( oraUser, connectString ) )
-
-
-def getMultipleRowsSingleColumn( oraUser, oraPassword, connectString, queryWithColon ) :
-	"""This method retrieves one column from a query which may return 0 
-	to many rows because we start a sqlplus process each time. For occasional use it 
-	should be ok but definitely not suitable for use within loops with many, many iterations.
-	Also the query must not contain newlines since if it does the user has no means to 
-	tell how many rows have been retrieved
-	"""
-	connectCommand=  composeConnectCommand( oraUser, oraPassword, connectString ) 
-	formatOutputSettings= "set pagesize 0 linesize 1000 trimspool on head off echo off verify off feedback off"
-
-	script = "\n".join ( [ connectCommand, formatOutputSettings, queryWithColon, 'exit' ] )
-	# _dbx( script )
-	proc= subprocess.Popen( ['sqlplus', '-s', '/nolog'] ,stdin=subprocess.PIPE ,stdout=subprocess.PIPE ,stderr=subprocess.PIPE)
-	msgLines, errLines= proc.communicate( script )
-	if len( errLines ) > 0 :
-		print( sys.stderr, ''.join( msgLines ) )
-		print( sys.stderr, ''.join( errLines  ) )
-
-		_errorExit( "Query returns errors %s:\n\t" % "\t\n".join( errLines ) )
-
-	msgLines = fuzzyNormalizeOutputMessages( msgLines )
-	if len( msgLines ) > 1 :
-		lastLine= msgLines[ len( msgLines ) - 1 ]
-		if lastLine.strip() == lastLine:
-			msgLines= msgLines[0 :  len( msgLines ) - 1 ]
-	# _dbx(  msgLines ) ; _dbx( len( msgLines ) )
-	return msgLines
-
-def expensiveGetOneColumnValue( oraUser, oraPassword, connectString, queryWithColon ) :
-	"""This is an expensive operation to retrieve one column from a query which must return
-	a single row because we start a sqlplus process each time. For occasional use it 
-	should be ok but definitely not suitable for high volumn usage
-  
-	"""
-	connectCommand=  composeConnectCommand( oraUser, oraPassword, connectString ) 
-	formatOutputSettings= "set pagesize 0 linesize 1000 trimspool on head off echo off verify off feedback off"
-
-	script = "\n".join ( [ connectCommand, formatOutputSettings, queryWithColon, 'exit' ] )
-	# _dbx( script )
-	proc= subprocess.Popen( ['sqlplus', '-s', '/nolog'] ,stdin=subprocess.PIPE ,stdout=subprocess.PIPE ,stderr=subprocess.PIPE)
-	msgLines, errLines= proc.communicate( script )
-	if len( errLines ) > 0 :
-		print( sys.stderr, ''.join( msgLines ) )
-		print( sys.stderr, ''.join( errLines  ) )
-
-		_errorExit( "Query returns errors %s:\n\t" % "\t\n".join( errLines ) )
-
-	msgLines = fuzzyNormalizeOutputMessages( msgLines )
-	# if there are more than one line and the last line is empty, we may remove it
-	if len( msgLines ) > 1 :
-		lastLine= msgLines[ len( msgLines ) - 1 ]
-		if lastLine.strip() == lastLine:
-			msgLines= msgLines[0 :  len( msgLines ) - 1 ]
-	# _dbx( "=>\n".join( msgLines ) )
-	if len( msgLines ) == 0 :
-		_errorExit( "Query returns no result" )
-	elif len( msgLines ) > 1 :
-		_errorExit( "Query returns more than one line. Could it be that Newline characters are inside the retrieved column?" )
-	return msgLines[0]
-
-
-
-def composePath4DatabaseObject( rootPath, dbName, schema= None, objectType= None, objectName= None ):
-	"""Example for the input '/tmp', 'CRMDB', 'SALES_DATA', 'TABLE', 'SALES_REGION'
-	the following string would be returned:
-	'/tmp/crmdb/sales_data/tables/sales_region.sql'
-
-	If root == '', the path would be relative:
-	'crmdb/sales_data/tables/sales_region.sql'
-	"""
-
-	dirPath= rootPath
-
-	if dbName != None:
-		dirPath= os.path.join( dirPath, dbName.lower() )
-
-	if schema != None:
-		dirPath= os.path.join( dirPath, schema.lower() )
-
-	if objectType != None:
-	
-		if objectType not in g_supportedObjectTypes:
-			_errorExit( "Object type '%s' is not supported!" % objectType )
-		dir4ObjectType = objectType.lower() +'s'
-		dirPath= os.path.join( dirPath, dir4ObjectType )
-
-	if objectName != None:
-		fullPath= os.path.join( dirPath, objectName.lower() ) + '.sql'
-	else:
-		fullPath= dirPath
-
-	return fullPath, dirPath
-
-def composeSpoolScripts4ObjectType( oraUser, oraPassword, connectString, dbName, schema, objectType):
-	"""Query the Oracle DB dictionary to generated SELECT DBMS_META.GET_DDL queries.
-	Also wrap each query within proper spooling commands so that the extracted code 
-	is stored at the intended locatioan such as /tmp/crmdb/sales_data/tables/sales_region.sql
-	"""
-	connectCommand=  composeConnectCommand( oraUser, oraPassword, connectString ) 
-	formatOutputSettings= "set pagesize 0 linesize 1000 trimspool on head off echo off verify off feedback off long 100000 longchunksize 100000"
-
-	transformCommand = configureTransformation4ObjectType( objectType )
-	entityDelim = '<#314Del1m$>'
-	condensedObjectType= objectType #fixme
-
-	objectsView = 'dba_objects' if g_useDbaViews else 'all_objects'
-	queryGenGetDdl = """
-with my_objs as (
-    select object_name
-    from {objectsView}
-    where 1=1
-      and object_type = '{objectType}'
-      and owner = '{schema}'
-)
- SELECT '{replaceSpoolTargetFor}{schema}{entityDelim}{condensedObjectType}{entityDelim}'||object_name
-||chr(10)
-||'SELECT DBMS_METADATA.GET_DDL(object_type=> ''{objectType}'', name=>'''||object_name||''' , SCHEMA=>''{schema}'' ) AS q FROM dual;'
-||chr(10)||'spool off'
- cmd
- from my_objs
-;
-	""".format( replaceSpoolTargetFor= g_spoolTargetMarker
-		, objectType= objectType
-		, condensedObjectType= condensedObjectType
-		, schema= schema
-		, entityDelim= entityDelim
-		, objectsView= objectsView
-	)
-	
-	_script = "\n".join ( [ connectCommand, formatOutputSettings, queryGenGetDdl, 'exit' ] )
-	proc= subprocess.Popen( ['sqlplus', '-s', '/nolog'] ,stdin=subprocess.PIPE ,stdout=subprocess.PIPE ,stderr=subprocess.PIPE ) # universal_newlines= True  seems to have no effect!
-	getDdlCodeBlocks, errLines= proc.communicate( _script )
-	if len( errLines ) > 0 :
-		print( sys.stderr, ''.join( getDdlCodeBlocks ) )
-		print( sys.stderr, ''.join( errLines  ) )
-
-		_errorExit( "Query returns errors %s:\n\t" % "\t\n".join( errLines ) )
-
-	getDdlCodeBlocks= fuzzyNormalizeOutputMessages( getDdlCodeBlocks ) 
-	# replace g_spoolTargetMarker but also return set of directories for the spool files
-	spoolDirs = []
-	markerLen= len( g_spoolTargetMarker )
-	cntObject= 0
-	for i, line in enumerate( getDdlCodeBlocks ):
-		if line.startswith( 'ORA-' ):
-			_infoTs( 'Found error whiling checking DDL extraction command: --> %s' % line ) 
-			_errorExit( 'Exit due to previous error' )
-		elif line.startswith( g_spoolTargetMarker ):
-			payload= line[ markerLen : ]
-			schema, objectType, objectName= payload.split( entityDelim )
-			fullPath, dirPath=  composePath4DatabaseObject( rootPath= g_workAreaRoot
-				, dbName = dbName, schema= schema, objectType= objectType
-				, objectName= objectName )
-			cntObject += 1
-			# _dbx( spoolFilePath )
-			if dirPath not in spoolDirs:
-				spoolDirs.append( dirPath )
-			getDdlCodeBlocks[i] = 'spool ' + fullPath
-				
-	outputScript = connectCommand + "\n" +  \
-		formatOutputSettings + "\n" +  \
-		transformCommand + "\n" +  \
-		"\n".join( getDdlCodeBlocks )
-		
-	return outputScript, spoolDirs, cntObject
-
-def sqlplusNologRunHereDoc ( hereDoc ):
-	""" invoke "sqlplus /nolog" to execute a script in memory
-	We pipe the hereDoc to sqlplus process. 
-	""" 
-
-	errLines = []
-
-	commandArgs= ['sqlplus', '-s', '/nolog' ]
-	# _dbx( hereDoc )
-	proc= subprocess.Popen( commandArgs, stdin=subprocess.PIPE ,stdout=subprocess.PIPE ,stderr=subprocess.PIPE, universal_newlines= True )
-	msgLines, errLines= proc.communicate( hereDoc.encode('utf-8') )
-
-	stdoutErrFile= fileSqlplusOutputIfErrorsFound( msgLines )
-
-	if stdoutErrFile != None:
-		_errorExit( "Check sqlplus error in file %s" % stdoutErrFile)
-
-	stderrErrFile= fileSqlplusOutputIfErrorsFound( errLines )
-	if stderrErrFile != None:
-
-		_errorExit( "Check sqlplus error in file %s" % stderrErrFile)
-
-	return msgLines
-
-def fileSqlplusOutputIfErrorsFound ( msgLines ):
-	logFile= None
-	if msgLines != None :
-		for line in msgLines:
-			# _dbx( line )
-			if line.startswith( 'ORA-' ) or line.startswith( 'SP2-' ):
-				logFile = tempfile.mktemp()
-				fh = open( logFile, 'w' )
-				fh.writelines( msgLines )
-				fh.close()
-				break
-	# _dbx( logFile )
-	return logFile
-
-def saveLinesToTempFile ( msgLines ):
-	if msgLines != None :
-		logFile = tempfile.mktemp()
-		fh = open( logFile, 'w' )
-		lno= 0
-		for line in msgLines: 
-			lno += 1
-			if line.rstrip() == line: # there is no endOfLine respectively newline
-				line = line + '\n'
-			fh.write( line )
-		fh.close()
-
-		return logFile
-	else:
-		 return None
-
-def saveStringToTempFile ( string ):
-	if string != None :
-		logFile = tempfile.mktemp()
-		fh = open( logFile, 'w' )
-		fh.write( string )
-		fh.close()
-
-		return logFile
-	else:
-		 return None
 
 def configureTransformation4ObjectType ( objectType ):
 	"""In general it is better to have a more compact DDL script 
@@ -675,6 +365,7 @@ def extractScriptsFromDatabase( includeSchemas, includeObjectTypes,  oraUser, or
 		_errorExit( "No object types have been specified for which scripts are to be extracted" ) 
 
 	statsMsgs.append("Scripts are to be extracted for the following %d schemas at '%s':" % ( len( includeSchemas ), dbName) ) 
+	
 	for schema in includeSchemas: 
 		statsMsgs.append( "\t" + schema )
 	statsMsgs.append("And for the following %d object types:" % len( includeObjectTypes ) ) 
@@ -682,49 +373,11 @@ def extractScriptsFromDatabase( includeSchemas, includeObjectTypes,  oraUser, or
 		statsMsgs.append( "\t" + objectType )
 
 	# _dbx( len( includeObjectTypes ) )
-	for schema in includeSchemas:
-		dbSchemaDir= composePath4DatabaseObject( g_workAreaRoot, dbName= dbName, schema= schema ) [0]
-		os.makedirs( dbSchemaDir )
-		schemaStats= []
-		for objectType in includeObjectTypes:
-			bigSpoolScript, objectTypeSubDirs, cntObject= composeSpoolScripts4ObjectType(  oraUser= oraUser
-				, oraPassword= oraPassword, connectString= connectString
-				, dbName= dbName, schema= schema, objectType= objectType )
-			# append a string element like 'Tables: 3' or 'Packages: 1'
-			schemaStats.append( "%s: %d" % ( objectType.title(), cntObject ) )
-			# create the directories as SQLPLUS SPOOL does not create the parent directories to a spool file
-			for dir in objectTypeSubDirs: 
-				os.makedirs( dir )
-			# _dbx( bigSpoolScript ); _errorExit( "test" )
-
-			_infoTs( "Extracting %s scripts for schema %s from database %s..." % ( objectType, schema, dbName ), True )
-			sqlplusNologRunHereDoc( bigSpoolScript )
-		statsMessage=  "\nObjects found in schema %s@%s:\n\t%s" % ( schema, dbName, ' '.join( schemaStats ) ) 
-		statsMsgs.append( statsMessage )
 
 	_infoTs( statsMessage )
 
 	return '\n'.join( statsMsgs )
 
-def chdirAndGetFindOutput ( path ):
-	"""Calls the unix find command and returns its output to the calling function
-	bomb out if any error was detected but only displayed upto 10 lines of the stderr
-	"""
-	
-	savedWorkDir = os.getcwd() ; os.chdir( path )
-
-	findCmdArgsUnix= [ 'find', '.' ]
-	
-	proc= subprocess.Popen( findCmdArgsUnix, stdin=subprocess.PIPE, stdout=subprocess.PIPE ,stderr=subprocess.PIPE) # universal_newlines= True  has no effect
-	unixOutMsgs, errMsgs= proc.communicate()
-
-	if len( errMsgs ) > 0 : # got error, return immediately
-		_errorExit( 'got error from find. Only first 10 lines are shown:\n%s ' % '\n'.join( errMsgs [ 0: 10]  ) )
-	unixOutMsgs= fuzzyNormalizeOutputMessages( unixOutMsgs )
-	# _dbx( "->".join( unixOutMsgs ) )# ; _errorExit( "test" )
-	os.chdir( savedWorkDir )
-
-	return unixOutMsgs 
 
 def genUnixDiff ( oldPath, newPath, recursive= False ):
 	"""Calls the unix diff command and returns its output to the calling function
@@ -742,41 +395,6 @@ def genUnixDiff ( oldPath, newPath, recursive= False ):
 
 	# _dbx(  len( unixOutMsgs ) )
 	return unixOutMsgs 
-
-def genDiffAndOverwriteOldFile ( oldFile, newFile ):
-	""" Unix line command diff can produce only plaintext output and it fails to ignore GIT keywords.
-	It also shows removed lines sometimes in a crammed (the lines) fashion.
-	"svn diff" can ignore GIT keywords but it is bad at ignoring whitespaces even with -x -b!
-
-	If both old and new file exist, do a unix diff then do a svn diff 
-	So we do both and pick the one with more compact output in terms of character count
-	"""
-	
-	unixOutMsg= genUnixDiff ( oldFile, newFile )
-	unixDiffSize = getTextSize( unixOutMsg )
-
-	# Now overwrite the checke -out version
-	shutil.copyfile( newFile, oldFile )
-
-	diffCmdArgsSvn= [ 'svn', 'diff', oldFile, '-x', '-b' ]
-	# _dbx ( ' '.join( diffCmdArgsSvn ) )
-	proc= subprocess.Popen( diffCmdArgsSvn, stdin=subprocess.PIPE, stdout=subprocess.PIPE ,stderr=subprocess.PIPE)
-	svnOutMsgs, errMsgs= proc.communicate()
-
-	if len( errMsgs ) > 0 : # got error, return immediately
-		_infoTs(  errMsgs.split( '\n' ) )
-		_errorExit( 'Aborted due to preceding errors' )
-	else: # note empty svn diff output is legal!
-		svnDiffSize = getTextSize( svnOutMsgs )
-
-	if svnDiffSize <= unixDiffSize:
-		cmdString =  ' '.join( diffCmdArgsSvn )
-		outputText = "\"%s\" produced the follwing output\n%s\n%s" % ( cmdString ,  '_' * 80 ,  svnOutMsgs ) 
-	else:
-		cmdString =  ' '.join( diffCmdArgsUnix )
-		outputText = "\"%s\" produced the follwing output\n%s\n%s" % ( cmdString ,  '_' * 80 ,  unixOutMsg ) 
-	
-	return ( outputText .split( '\n' ) )
 
 def compareTwoTreesReturnFile( treeA, treeB, expressiveNameA, expressiveNameB, copyBFilesToAAndDiff = False ):
 	buddyFileMatches = []
@@ -973,101 +591,6 @@ def sendMimeText ( recipients, subject, asciiText, htmlText= None, zipAttachment
 
 	s.quit()
 
-def performActionDiffDbDb ( argObject, includeSchemas, includeObjectTypes) :
-	""" extract DDL scripts from database A and B which match the specified patterns
-	 (schemas and object types), store the scripts underneath the
-	sandbox root and perform a recursive diff on each scripts from both databases.
-	"""
-	global g_primaryOraPassword
-	global g_secondaryOraPassword
-
-	validateSettings( argObject )
-
-	g_primaryOraPassword   = getOraPassword( oraUser= g_primaryOraUser  , oraPasswordEnvVar= g_envVarNamePrimarySecret
-		, batchMode= argObject.batch_mode )
-	g_secondaryOraPassword = getOraPassword( oraUser= g_secondaryOraUser, oraPasswordEnvVar= g_envVarNameSecondarySecret
-		, batchMode= argObject.batch_mode )
-
-	# ping the primary DB
-	_infoTs( 'Testing oracle DB connection to %s' % g_primaryConnectString, True )
-	testOracleConnect(  oraUser= g_primaryOraUser, oraPassword= g_primaryOraPassword, connectString= g_primaryConnectString )
-	primaryDbName= expensiveGetOneColumnValue( oraUser= g_primaryOraUser
-		, oraPassword= g_primaryOraPassword, connectString= g_primaryConnectString
-		, queryWithColon = g_queryDbName ) 
-
-	# ping the secondary DB
-	# _dbx( "'%s'" % g_secondaryOraPassword ) ; _errorExit( "test" )
-	_infoTs( 'Testing oracle DB connection to %s' % g_secondaryConnectString, True )
-	testOracleConnect(  oraUser= g_secondaryOraUser, oraPassword= g_secondaryOraPassword, connectString= g_secondaryConnectString )
-	secondaryDbName= expensiveGetOneColumnValue( oraUser= g_secondaryOraUser
-		, oraPassword= g_secondaryOraPassword, connectString= g_secondaryConnectString
-		, queryWithColon = g_queryDbName ) 
-
-	primarySandboxPath= composePath4DatabaseObject( g_workAreaRoot, primaryDbName ) [0]
-	secondarySandboxPath= composePath4DatabaseObject( g_workAreaRoot, secondaryDbName ) [0]
-	os.makedirs( primarySandboxPath ) # make sure the path does exist even if no script will be extracted
-	os.makedirs( secondarySandboxPath ) # make sure the path does exist even if no script will be extracted
-
-	if True: # make it easier to skip while testing
-		statusMsgPrimary = extractScriptsFromDatabase( includeSchemas= includeSchemas, includeObjectTypes= includeObjectTypes 
-			,  oraUser= g_primaryOraUser, oraPassword= g_primaryOraPassword, connectString= g_primaryConnectString \
-			, dbName= primaryDbName)
-			
-		statusMsgSecondary= extractScriptsFromDatabase( includeSchemas= includeSchemas, includeObjectTypes= includeObjectTypes 
-			,  oraUser= g_secondaryOraUser, oraPassword= g_secondaryOraPassword, connectString= g_secondaryConnectString \
-			, dbName= secondaryDbName)
-			
-	mailTextLines= []	
-	mailTextLines.append( statusMsgPrimary + '\n' + '*'*80 )
-	mailTextLines.append( statusMsgSecondary + '\n' + '*'*80 )
-
-	for schema in includeSchemas:
-		treeA=  composePath4DatabaseObject( g_workAreaRoot, primaryDbName, schema ) [0]
-		treeB=  composePath4DatabaseObject( g_workAreaRoot, secondaryDbName, schema ) [0]
-		diffTreeOutputFile= compareTwoTreesReturnFile( treeA= treeA, treeB= treeB
-			, expressiveNameA= schema+'@'+ primaryDbName , expressiveNameB= schema+'@'+ secondaryDbName
-			, copyBFilesToAAndDiff = False )
-	
-		diffOutput= open( diffTreeOutputFile, 'r' ).readlines()
-		mailTextLines.extend( diffOutput )
-
-	textSize= getTextSize( mailTextLines )
-	if argObject.mail_recipient != None:
-		_infoTs( "Sending diff output to %s (text size: %d)" % ( argObject.mail_recipient, textSize) )
-		sendMimeText ( recipients= argObject.mail_recipient, subject= "Diff for specified database objects"
-			, asciiText= ''.join( mailTextLines ) )
-	else:
-		tempFile= saveLinesToTempFile( mailTextLines )
-		_infoTs( "diff output stored to %s (text size: %d)" % ( tempFile, textSize) )
-
-
-def addNewNodesToSvn( sandbox ):
-	""" cd to the sandbox and run "svn status" to see which nodes are not yet scheduled.
-	Add them
-	"""
-	savedWorkDir = os.getcwd(); os.chdir( sandbox )
-
-	rc, msgLines, errLines = svnHelper.svnQuery ( queryArgs= ['status'] )
-	if errLines != None and len( errLines ) > 0: 
-		_infoTs( ''.join( errLines ) )
-		_errorExit( "svn checkin failed due to previous issues" )
-	
-	newNodes= []
-	for line in msgLines :
-		if line.startswith( '? '):
-			node= line[1:].strip()
-			# _dbx( node )
-			newNodes.append( node )
-
-	svnAddCmdArgs= ['add']
-	if len( newNodes ) > 0:
-		svnAddCmdArgs.extend( newNodes )
-		rc, msgLines, errLines = svnHelper.svnQuery ( queryArgs= svnAddCmdArgs )
-		if errLines != None and len( errLines ) > 0: 
-			_infoTs( ''.join( errLines ) )
-			_errorExit( "svn add failed due to previous issues" )
-
-	os.chdir( savedWorkDir )
 
 def mergeTreeWithDeleteCheck ( sourceTree, targetTree, deleteCheckObjectTypes ):
 	"""When the scripts are extracted into a tree and the tree is supposed 
@@ -1180,148 +703,11 @@ def mergeTreeWithDeleteCheck ( sourceTree, targetTree, deleteCheckObjectTypes ):
 					else:
 						localSvnMove( sandboxPath= fullDirPathSandbox, sourceNode= file, targetNode= trashDirFixName )
 
-def  localSvnDelete( node ):
-	""" need to do this for example we want to move an object into _trashbin but that object 
-	is already present there. In this case it is ok to svn delete it (without commit) yet
-	and do the actual svn move
-	"""
-	# _dbx( node )
-
-	parentPath = os.path.split( node ) [0]
-	savedWorkDir = os.getcwd(); os.chdir( parentPath )
-
-	svnCmdArgs= ['delete',  node]
-	rc, msgLines, errLines = svnHelper.svnQuery ( queryArgs= svnCmdArgs )
-	if msgLines != None: 
-		_infoTs ( "Output from svn DELETE:\n%s" % ''.join( msgLines ) )
-	if errLines != None and len( errLines ) > 0 : 
-		_infoTs( ''.join( errLines ) )
-		_errorExit( "svn DELETE failed due to previous issues" )
-
-def  localSvnMove( sandboxPath, sourceNode, targetNode ):
-	"""chdir to sandboxPath and schedules a add + delete (move)
-	"""
-
-	# _dbx( sandboxPath ); _dbx( sourceNode + ' --> ' +  targetNode )
-
-	savedWorkDir = os.getcwd(); os.chdir( sandboxPath )
-
-	svnCmdArgs= ['move',  sourceNode, targetNode]
-	rc, msgLines, errLines = svnHelper.svnQuery ( queryArgs= svnCmdArgs )
-	if msgLines != None: 
-		_infoTs ( "Output from svn MOVE:\n%s" % ''.join( msgLines ) )
-	if errLines != None and len( errLines ) > 0 : 
-		_infoTs( ''.join( errLines ) )
-		_errorExit( "svn MOVE failed due to previous issues" )
-
-	os.chdir( savedWorkDir )
-
-def  assertSvnSubDir( parentPath, subDir ):
-	"""Make sure a GIT directory exists (at least locally added) under the parent 
-	as the current working directory
-	"""
-	# _dbx( parentPath + ' subdir: ' + subDir )
-	savedWorkDir = os.getcwd(); os.chdir( parentPath )
-	if not os.path.isdir( subDir ):
-		os.makedirs( subDir ) 
-
-		svnCmdArgs= ['add', subDir]
-		rc, msgLines, errLines = svnHelper.svnQuery ( queryArgs= svnCmdArgs )
-		if msgLines != None: 
-			_infoTs (''.join( msgLines ) )
-		if errLines != None and len( errLines ) > 0 : 
-			_infoTs( ''.join( errLines ) )
-			_errorExit( "svn checkin failed due to previous issues" )
-
-	os.chdir( savedWorkDir )
-	return os.path.join(  parentPath, subDir )
-
-def promptAndSetSvnPasswor( svnUser, batchMode ):
-	_dbx( "batch_mode" if batchMode else "interactive" )
-	svnHelper.g_svnUser= svnUser
-	secret= svnHelper.getSvnPassword( svnUser, batchMode= batchMode )
-	svnHelper.g_svnAuth= secret
-
 def forceCopyTree ( src, dst ):
 	"""since shutil plays safe and does not provide any API to force copy a tree
 	we will use the OS "cp -r" for this purpose
 	"""
 	subprocess.check_call( [ 'cp', '-r', src, dst ] )
-
-def performActionDiffDbRepo ( argObject, includeSchemas, includeObjectTypes) :
-	""" checkout a repository tree from the given URL and extract DDL scripts 
-	from given database, store the scripts underneath the sandbox root and 
-	perform a recursive diff 
-	"""
-	global g_primaryOraPassword
-
-	validateSettings( argObject )
-
-	if argObject.repo_url1.startswith( 'file:///' ) : # file protocol needs no credentials?
-		svnHelper.g_needCredentials= False 
-	else: 
-		promptAndSetSvnPasswor (argObject.svn_user, batchMode= argObject.batch_mode)
-
-	g_primaryOraPassword   = getOraPassword( oraUser= g_primaryOraUser  , oraPasswordEnvVar= g_envVarNamePrimarySecret
-		, batchMode= argObject.batch_mode )
-
-	# ping the primary DB
-	_infoTs( 'Testing oracle DB connection to %s' % g_primaryConnectString, True )
-	testOracleConnect(  oraUser= g_primaryOraUser, oraPassword= g_primaryOraPassword, connectString= g_primaryConnectString )
-	# get the DB name since we need it as part of the os path for the scripts
-	dbName= expensiveGetOneColumnValue( oraUser= g_primaryOraUser
-		, oraPassword= g_primaryOraPassword, connectString= g_primaryConnectString
-		, queryWithColon = g_queryDbName ) 
-	
-	extractedScriptsRoot= composePath4DatabaseObject( g_workAreaRoot, dbName ) [0]
-	os.makedirs( extractedScriptsRoot ) # make sure the path does exist even if no script will be extracted
-
-	if True: # make it easier to skip while testing
-		statusMsgPrimary = extractScriptsFromDatabase( includeSchemas= includeSchemas, includeObjectTypes= includeObjectTypes 
-			,  oraUser= g_primaryOraUser, oraPassword= g_primaryOraPassword, connectString= g_primaryConnectString \
-			, dbName= dbName)
-			
-	mailTextLines= []	
-	mailTextLines.append( statusMsgPrimary + '\n' + '*'*80 )
-
-	# diff schema-wise
-	relevantDbSchemaPathsInWorkArea= []
-	relevantDbSchemaUrls=     []
-	for schema in includeSchemas:
-		schemaUrl= composePath4DatabaseObject(  rootPath= argObject.repo_url1, dbName= None # we may be compare checked-in stuff from database A with stuff extracted directly from database B, so we have to omit dbName
-			, schema= schema )[0]
-		relevantDbSchemaUrls.append( schemaUrl )
-		
-	#_dbx( "Urls: \n%s" % "\n".join( relevantDbSchemaUrls ) )
-
-	for i, schema in enumerate( includeSchemas ):
-		workAreaSchemaPath= composePath4DatabaseObject(  rootPath= g_workAreaRoot, dbName= dbName, schema= schema )[0]
-
-		schemaUrl= relevantDbSchemaUrls [i]
-		svnSandbox= svnHelper.checkoutToTempDir( schemaUrl )
-
-		# since the helper returns a path which does not contain the parent node, we need to fix it
-		parentNodeName= os.path.basename( schemaUrl )
-		tempDir= tempfile.mkdtemp()
-		svnPathCorrected = os.path.join( tempDir , parentNodeName )
-		# _dbx( svnPathCorrected )
-		shutil.move( svnSandbox, svnPathCorrected )
-		
-		diffTreeOutputFile= compareTwoTreesReturnFile( treeA= svnPathCorrected, treeB= workAreaSchemaPath
-			, expressiveNameA= schemaUrl, expressiveNameB= "Schema %s at database %s" % ( schema, dbName )
-			, copyBFilesToAAndDiff = True )
-	
-		diffOutput= open( diffTreeOutputFile, 'r' ).readlines()
-		mailTextLines.extend( diffOutput )
-
-	textSize= getTextSize( mailTextLines )
-	if argObject.mail_recipient != None:
-		_infoTs( "Sending diff output to %s (text size: %d)" % ( argObject.mail_recipient, textSize) )
-		sendMimeText ( recipients= argObject.mail_recipient, subject= "Diff for specified database objects"
-			, asciiText= ''.join( mailTextLines ) )
-	else:
-		tempFile= saveLinesToTempFile( mailTextLines )
-		_infoTs( "diff output stored to %s (text size: %d)" % ( tempFile, textSize) )
 
 
 def assertDbSchemas ( connectUser, connectPassword, connectString, schemas ):
@@ -1348,111 +734,6 @@ def assertDbSchemas ( connectUser, connectPassword, connectString, schemas ):
 		
 		_errorExit( "Following schemas do not exist at %s: %s" % ( connectString, ','.join( missingSchemas ) ) )
 
-def performActionCheckin ( argObject, includeSchemas, includeObjectTypes) :
-	""" extract DDL scripts from the primary database for the given schema, 
-	store the scripts underneath the sandbox root and import or commit them 
-	to the given repository URL
-	"""
-	global g_primaryOraPassword
-
-	g_primaryOraPassword   = getOraPassword( oraUser= g_primaryOraUser  , oraPasswordEnvVar= g_envVarNamePrimarySecret 
-		, batchMode= argObject.batch_mode )
-
-	validateSettings( argObject )
-
-	if argObject.checkin_target_url.startswith( 'file:///' ) or argObject.use_default_svn_auth == 'y' :  # file protocol needs no credentials?
-		svnHelper.g_needCredentials= False 
-	else: 
-		promptAndSetSvnPasswor (argObject.svn_user, batchMode= argObject.batch_mode)
-
-	nodeKind=  svnHelper.getUrlNodeKind( argObject.checkin_target_url )
-	_dbx( nodeKind )
-	rootDboNodeExists= False
-  
-	if "skip_repo_validation_for_now" == "y":
-		if nodeKind == None:
-			_errorExit( "GIT URL: %s does not exist. Make sure it exists and is a directory" % argObject.checkin_target_url )
-		elif nodeKind == 'file':
-			_errorExit( "GIT URL: %s is a file! Make sure it is a directory" % argObject.checkin_target_url )
-		else:
-			rootDboNodeExists= True
-	
-	# ping the primary DB
-	_infoTs( 'Testing oracle DB connection to %s' % g_primaryConnectString, True )
-	testOracleConnect(  oraUser= g_primaryOraUser, oraPassword= g_primaryOraPassword, connectString= g_primaryConnectString )
-	primaryDbName= expensiveGetOneColumnValue( oraUser= g_primaryOraUser
-		, oraPassword= g_primaryOraPassword, connectString= g_primaryConnectString
-		, queryWithColon = g_queryDbName ) 
-	assertDbSchemas(  connectUser= g_primaryOraUser, connectPassword= g_primaryOraPassword, connectString= g_primaryConnectString
-		, schemas= includeSchemas )
-	url4DbNameNode= composePath4DatabaseObject( rootPath= argObject.checkin_target_url, dbName= primaryDbName )[0]
-	# _dbx( url4DbNameNode )
-
-	statusMsgPrimary = extractScriptsFromDatabase( includeSchemas= includeSchemas, includeObjectTypes= includeObjectTypes 
-		,  oraUser= g_primaryOraUser, oraPassword= g_primaryOraPassword, connectString= g_primaryConnectString \
-		, dbName= primaryDbName)
-
-	checkInMessage= "Extraced at " + time.strftime("%Y.%m.%d %H:%M") 
-	"""We should have created <dbName>/<Schema> directories as configured and 
-	populated them with script files extracted from the database. The directories
-	are logically derived from the checkin URL target. 
-	To perform merge back into the repository with "delete check", if we were to
-	proceed also on the the node <checkin URL target>, we would be checking out
-	directories which are not part of desired configuration at all. For example
-	if the configuration only includes schema B and D for database X, 
-	but the repository has directories for schema A - F for database X, plus
-	schema A - H for database Y, we must only perform "delete check" on the 
-	A@x and D@X, NOT on the others!
-	To this end, we must check out only the relevant <dbName>/<Schema> directories
-	and operate on them.	
-	"""
-	relevantDbSchemaPathsInWorkArea= []
-	relevantDbSchemaUrls=     []
-	for schema in includeSchemas:
-		path= composePath4DatabaseObject(  rootPath= g_workAreaRoot, dbName= primaryDbName, schema= schema )[0]
-		relevantDbSchemaPathsInWorkArea.append( path )
-
-		targetUrl= composePath4DatabaseObject(  rootPath= argObject.checkin_target_url, dbName= primaryDbName, schema= schema )[0]
-		relevantDbSchemaUrls.append( targetUrl )
-		
-	#_dbx( "Urls: \n%s" % "\n".join( relevantDbSchemaUrls ) )
-	#_dbx( "Paths: \n%s" % "\n".join( relevantDbSchemaPathsInWorkArea ) )
-
-	for i, dbSchemaPath in enumerate( relevantDbSchemaPathsInWorkArea ):
-		checkinTarget= relevantDbSchemaUrls[ i ]
-		nodeKind=  svnHelper.getUrlNodeKind( checkinTarget )
-		# _dbx( nodeKind )
-
-		schemaNodeExists= False
-		if nodeKind == None:
-			_infoTs( "GIT URL %s will be created." % checkinTarget )
-		elif nodeKind == 'file':
-			_errorExit( "GIT URL: %s is a file! Make sure it is a directory" %cckinTarget )
-		else:
-			schemaNodeExists= True
-
-		if not schemaNodeExists:
-			svnCmdArgs= [ 'import', dbSchemaPath, checkinTarget ]
-		else:
-			# of course we need to check out before before checkin
-			checkedOutToPath=  svnHelper.checkoutToTempDir( checkinTarget ) 
-			mergeTreeWithDeleteCheck ( sourceTree= dbSchemaPath, targetTree= checkedOutToPath 
-				, deleteCheckObjectTypes= includeObjectTypes )
-	
-			addNewNodesToSvn( checkedOutToPath )
-			svnCmdArgs= [ "commit", checkedOutToPath ]
-				
-		svnCmdArgs.extend( [ '-m', checkInMessage ] )
-		
-		_infoTs( "Submitting Svn request: %s " % ' '.join( svnCmdArgs ) )
-		# _errorExit( "test" )
-		rc, msgLines, errLines = svnHelper.svnQuery ( queryArgs= svnCmdArgs )
-		if msgLines != None: 
-			_infoTs ( "Output from svn COMMIT:\n%s" % ''.join( msgLines ) )
-		if errLines != None and len( errLines ) > 0 : 
-			_infoTs( ''.join( errLines ) )
-
-			_errorExit( "svn commit failed due to previous issues" )
 
 def getListOfRelevantSubfolders ( rootPath, dbName, includeSchemas, includeObjectTypes ):
 	""" we only want to perform certain tasks ("delete check" for example) on relevant
@@ -1467,38 +748,18 @@ def getListOfRelevantSubfolders ( rootPath, dbName, includeSchemas, includeObjec
 
 	return subFolders
 
-def performActionDiffRepoRepo ( argObject, includeSchemas= None, includeObjectTypes= None ) :
-	""" export scripts from the given repo URL's and perform a diff on each file node
-	Since we want to choose the "best" diff from both Unix and GIT diff, we need one file 
-	tree with GIT metadata (checkou) and one without (export). We do the unix diff first
-	between the sandboxed version and exported version. Then we overwrite the sandboxed version
-	with the exported version for a GIT diff.
+def performActionExtract ( argObject, includeSchemas= None, includeObjectTypes= None ) :
+	""" extract DDL scripts
+	"""
+	pass
+
+def performActionDiff2Trees ( argObject, includeSchemas= None, includeObjectTypes= None ) :
+	""" 
 	"""
 	validateSettings( argObject )
 
 	if argObject.repo_url1 == argObject.repo_url2:
 		_errorExit( "repo_urlr1 and repo_url2 must not be identical!" )
-
-	if argObject.repo_url1.startswith( 'file:///' ) or argObject.repo_url1.startswith( 'file:///' ) :  # file protocol needs no credentials?
-		svnHelper.g_needCredentials= False 
-
-	nodeKind1=  svnHelper.getUrlNodeKind( argObject.repo_url1 )
-	if nodeKind1 == None:
-		_errorExit( "GIT URL: %s does not exist. Make sure it exists and is a directory" % argObject.repo_url1 )
-	elif nodeKind1 == 'file':
-		_errorExit( "GIT URL: %s is a file! Make sure it is a directory" % argObject.repo_url1 )
-	
-	nodeKind2=  svnHelper.getUrlNodeKind( argObject.repo_url2 )
-	if nodeKind2 == None:
-		_errorExit( "GIT URL: %s does not exist. Make sure it exists and is a directory" % argObject.repo_url2 )
-	elif nodeKind2 == 'file':
-		_errorExit( "GIT URL: %s is a file! Make sure it is a directory" % argObject.repo_url2 )
-	
-	repo1CheckedOutPath= svnHelper.checkoutToTempDir( argObject.repo_url1 )
-
-	tempDirMeaningfullName= g_myBaseName[0:8] + '_repo2' 
-	repo2ExportedPath= svnHelper.exportToTempDir( argObject.repo_url2 , tempDirMeaningfullName )
-	# _dbx( repo2ExportedPath )
 
 	diffTreeOutputFile= compareTwoTreesReturnFile( treeA= repo1CheckedOutPath, treeB= repo2ExportedPath
 		, expressiveNameA= argObject.repo_url1, expressiveNameB= argObject.repo_url2
@@ -1537,8 +798,6 @@ def main():
 		performActionDiffDbRepo( argObject= argObject, includeObjectTypes= includeObjectTypes, includeSchemas= includeSchemas )
 	elif argObject.action == 'diff-repo-repo':
 		performActionDiffRepoRepo( argObject= argObject )
-	elif argObject.action == 'checkin':
-		performActionCheckin( argObject= argObject, includeObjectTypes= includeObjectTypes, includeSchemas= includeSchemas )
 
 	else:
 		_errorExit( "Action %s is not yet implemented" % ( argObject.action ) )
