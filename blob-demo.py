@@ -49,21 +49,27 @@ cur.execute ("""select username from user_users""")
 userName= cur.fetchall() # fetch the complete result set
 print( userName )
 
-# the query has to return at least 2 columns so that a BLOB is indeed treated as a BLOB. 
-# A single BLOB column would be treated as tuple!
-# cur.execute(r"select to_blob( hextoraw( 'f0f1f2fe' ) ) foo, 1 bar from dual where 1 = :1", [ 1 ]) # this query demos use of bind variables
-cur.execute(r"select content, 1 bar from test_blob where 1 = :1", [ 1 ]) # this query demos use of bind variables
-
-blobData, aNum = cur.fetchone()
-_dbx( type(aNum) )
-_dbx( type(blobData) )
-_dbx( "BLOB length:%d" % len(blobData) )
+# test array as bind variable
+#this gives ORA-01036 illegal variable name/numbe: cur.execute(r"select content, 1 bar from table ( ora_mining_number_nt( :1) )", [1,2,3] );
+cur.execute(r"select count(1), 0 dummy from table ( split_to_array(:1) )", [ "ab,bd" ] );
+cnt, dummy = cur.fetchone()
+_dbx( cnt )
 
 import tempfile
+if "test" == "blob":
+	# the query has to return at least 2 columns so that a BLOB is indeed treated as a BLOB. 
+	# A single BLOB column would be treated as tuple!
+	# cur.execute(r"select to_blob( hextoraw( 'f0f1f2fe' ) ) foo, 1 bar from dual where 1 = :1", [ 1 ]) # this query demos use of bind variables
+	cur.execute(r"select content, 1 bar from test_blob where 1 = :1", [ 1 ]) # this query demos use of bind variables
+	
+	blobData, aNum = cur.fetchone()
+	_dbx( type(aNum) )
+	_dbx( type(blobData) )
+	_dbx( "BLOB length:%d" % len(blobData) )
 
-tempFile = tempfile.mktemp()
-_dbx( tempFile )
-fh = open( tempFile, "wb" ); 
-fh.write( blobData ); 
-fh.close()
-
+	tempFile = tempfile.mktemp()
+	_dbx( tempFile )
+	fh = open( tempFile, "wb" ); 
+	fh.write( blobData ); 
+	fh.close()
+	
