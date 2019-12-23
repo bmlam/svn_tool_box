@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 """
 This program facilitates the inventorizing of an Oracle database object structures.
 It extracts such information from the oracle data dictionary and stores the SQL
@@ -52,6 +52,7 @@ Below is an examplary command to extract the specified objects and check the res
 """
 
 import argparse
+import cx_Oracle
 import difflib
 import getpass
 import glob
@@ -133,9 +134,16 @@ def _errorExit ( text ):
 
 def getTextSize ( lines ):
 	rc = 0
-	for line in lines:
-		rc += len( line )
+	for line in lines: rc += len( line )
 	return rc	
+
+def conxOutputTypeHandler(cursor, name, defaultType, size, precision, scale):
+	if defaultType == cx_Oracle.CLOB:
+		return cursor.var(cx_Oracle.LONG_STRING, arraysize=cursor.arraysize)
+	if defaultType == cx_Oracle.BLOB:
+		return cursor.var(cx_Oracle.LONG_BINARY, arraysize=cursor.arraysize)
+
+
 
 def parseCmdLine() :
 
@@ -283,6 +291,39 @@ def getOraPassword ( oraUser, oraPasswordEnvVar, batchMode ):
 			hiddenPassword= passwordEnv
 	return hiddenPassword
 
+
+####
+def getOracSqlRunner( oraUser, password, host, port, service ):
+	""" set up an Oracle session and return a cursor with which queries can be executed. Result of query
+		can be fetched using fetchone or fetchall. Why exactly we need a cursor instead of using the 
+		connection handle directly, remains to be clarified.
+	"""
+	myDsn = cx_Oracle.makedsn(host, port, service_name= service) # if needed, place an 'r' before any parameter in order to address special characters such as '\'.
+	
+	conx= cx_Oracle.connect( user= oraUser, password= password, dsn= myDsn )   
+	conx.outputtypehandler = conxOutputTypeHandler
+	
+	cur = conx.cursor()  # instantiate a handle
+	cur.execute ("""select username, sys_context( 'userenv', 'db_name' ) from user_users""")  
+	connectedAs, dbName = cur.fetchone()
+	_infoTs( "connected as %s to %s" % ( connectedAs, dbName ) )
+
+	return cur
+
+####
+def getSqlRunnerForPrimaryDB():
+	""" connect to primary Oracle DB and return a cursor to run SQL
+	"""
+	global g_primaryConnectString
+	global g_primaryOraUser
+	global g_envVarNamePrimarySecret
+	
+	password = getOraPassword ( oraUser= g_primaryOraUser, oraPasswordEnvVar= g_envVarNamePrimarySecret, batchMode= False )
+	host, port, service = g_primaryConnectString.split( ":" )
+	# _dbx( host ); _dbx( service )
+	sqlRunner =  getOracSqlRunner( oraUser= g_primaryOraUser, password= password, host=host, port= port, service= service )
+
+####
 def validateSettings ( argObject ):
 	checkSvnUser = False if argObject.use_default_svn_auth else True
 
@@ -318,6 +359,7 @@ def validateSettings ( argObject ):
 			_errorExit( "For action %s, '%s' is required!" % ( argObject.action, key ) )
 			
 
+####
 def containsForeignCharacters( inputString, localCharacters ):
 	"""Return True if inputString contains characters which are not within the set
 	of localCharacters. If inputString or standardCharacters is None, return True anyway.
@@ -331,7 +373,7 @@ def containsForeignCharacters( inputString, localCharacters ):
 	
 	return False
 
-
+####
 def configureTransformation4ObjectType ( objectType ):
 	"""In general it is better to have a more compact DDL script 
 	The default behaviour of DBMS_METADATA however is to return 
@@ -355,6 +397,7 @@ end;
 
 	return rc
 
+####
 def extractScriptsFromDatabase( includeSchemas, includeObjectTypes,  oraUser, oraPassword, connectString, dbName ):
 	"""Extract DDL scripts for the given schemas and object types from the given database
 	"""
@@ -378,7 +421,7 @@ def extractScriptsFromDatabase( includeSchemas, includeObjectTypes,  oraUser, or
 
 	return '\n'.join( statsMsgs )
 
-
+####
 def genUnixDiff ( oldPath, newPath, recursive= False ):
 	"""Calls the unix diff command and returns its output to the calling function
 	bomb out if any error was detected but only displayed upto 10 lines of the stderr
@@ -396,6 +439,7 @@ def genUnixDiff ( oldPath, newPath, recursive= False ):
 	# _dbx(  len( unixOutMsgs ) )
 	return unixOutMsgs 
 
+####
 def compareTwoTreesReturnFile( treeA, treeB, expressiveNameA, expressiveNameB, copyBFilesToAAndDiff = False ):
 	buddyFileMatches = []
 	diffOutputsByNode = {}
@@ -465,7 +509,7 @@ def compareTwoTreesReturnFile( treeA, treeB, expressiveNameA, expressiveNameB, c
 						if  len( msgLines ) <= g_maxDiffLines:
 							diffOutputsByNode[ relPath ] =   '\n'.join( msgLines )
 						else:
- 							excerpt= msgLines [ 0 : g_maxDiffLines - 1] 
+							excerpt= msgLines [ 1 : g_maxDiffLines - 1] 
 							# _dbx( "type: %s, len: %d" % (type( excerpt ), len( excerpt ) ) )
 							excerpt.append( "\n... diff output contained %d lines. The rest has been suppressed " % len( msgLines ) )
 							diffOutputsByNode[ relPath ] = '\n'.join( excerpt )
@@ -533,6 +577,7 @@ def compareTwoTreesReturnFile( treeA, treeB, expressiveNameA, expressiveNameB, c
 
 	return diffOutputFile
 
+####
 def diffTwoTexts( text1, text2 ):
 	file1= saveLinesToTempFile( text1 )
 	file2= saveLinesToTempFile( text2 )
@@ -541,6 +586,7 @@ def diffTwoTexts( text1, text2 ):
 	# diffFile= saveLinesToTempFile( result ); _errorExit( diffFile )
 	return result 
 	
+####
 def sendMimeText ( recipients, subject, asciiText, htmlText= None, zipAttachment = None ):
 	from email.mime.text import MIMEText
 	from email.mime.base import MIMEBase
@@ -592,6 +638,7 @@ def sendMimeText ( recipients, subject, asciiText, htmlText= None, zipAttachment
 	s.quit()
 
 
+####
 def mergeTreeWithDeleteCheck ( sourceTree, targetTree, deleteCheckObjectTypes ):
 	"""When the scripts are extracted into a tree and the tree is supposed 
 	to overwrite the checked-in versions, what happens with those object 
@@ -703,6 +750,7 @@ def mergeTreeWithDeleteCheck ( sourceTree, targetTree, deleteCheckObjectTypes ):
 					else:
 						localSvnMove( sandboxPath= fullDirPathSandbox, sourceNode= file, targetNode= trashDirFixName )
 
+####
 def forceCopyTree ( src, dst ):
 	"""since shutil plays safe and does not provide any API to force copy a tree
 	we will use the OS "cp -r" for this purpose
@@ -751,7 +799,7 @@ def getListOfRelevantSubfolders ( rootPath, dbName, includeSchemas, includeObjec
 def performActionExtract ( argObject, includeSchemas= None, includeObjectTypes= None ) :
 	""" extract DDL scripts
 	"""
-	pass
+	sqlRunner = getSqlRunnerForPrimaryDB()
 
 def performActionDiff2Trees ( argObject, includeSchemas= None, includeObjectTypes= None ) :
 	""" 
@@ -792,8 +840,8 @@ def main():
 	_infoTs( "*" * 10 + "%s started. Program version: ?\n" % ( os.path.basename( sys.argv[0] ) ), True )
 
 	os.makedirs( g_workAreaRoot ) # all actions will need this directory node
-	if argObject.action == 'diff-db-db':
-		performActionDiffDbDb( argObject= argObject, includeObjectTypes= includeObjectTypes, includeSchemas= includeSchemas )
+	if argObject.action == 'extract':
+		performActionExtract( argObject= argObject, includeObjectTypes= includeObjectTypes, includeSchemas= includeSchemas )
 	elif argObject.action == 'diff-db-repo':
 		performActionDiffDbRepo( argObject= argObject, includeObjectTypes= includeObjectTypes, includeSchemas= includeSchemas )
 	elif argObject.action == 'diff-repo-repo':
