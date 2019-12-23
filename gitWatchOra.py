@@ -323,6 +323,7 @@ def getSqlRunnerForPrimaryDB():
 	# _dbx( host ); _dbx( service )
 	sqlRunner =  getOracSqlRunner( oraUser= g_primaryOraUser, password= password, host=host, port= port, service= service )
 
+
 ####
 def validateSettings ( argObject ):
 	checkSvnUser = False if argObject.use_default_svn_auth else True
@@ -398,16 +399,19 @@ end;
 	return rc
 
 ####
-def extractScriptsFromDatabase( includeSchemas, includeObjectTypes,  oraUser, oraPassword, connectString, dbName ):
+def extractScriptsFromDatabase( includeSchemas, includeObjectTypes, sqlRunner ) :
 	"""Extract DDL scripts for the given schemas and object types from the given database
 	"""
+	query = ' '.join( open( "./parameterized_extractor.sql", "r").readlines() )
+	_dbx(  query[ : 100] ) 
+
 	statsMsgs= []
 	if len( includeSchemas ) == 0:
 		_errorExit( "No schemas have been specified from which objects are to be extracted!"  )
 	if len( includeObjectTypes ) == 0:
 		_errorExit( "No object types have been specified for which scripts are to be extracted" ) 
 
-	statsMsgs.append("Scripts are to be extracted for the following %d schemas at '%s':" % ( len( includeSchemas ), dbName) ) 
+	statsMsgs.append("Scripts are to be extracted for the following %d schemas:" % ( len( includeSchemas ) ) )
 	
 	for schema in includeSchemas: 
 		statsMsgs.append( "\t" + schema )
@@ -417,9 +421,8 @@ def extractScriptsFromDatabase( includeSchemas, includeObjectTypes,  oraUser, or
 
 	# _dbx( len( includeObjectTypes ) )
 
-	_infoTs( statsMessage )
+	_infoTs( statsMsgs )
 
-	return '\n'.join( statsMsgs )
 
 ####
 def genUnixDiff ( oldPath, newPath, recursive= False ):
@@ -800,6 +803,7 @@ def performActionExtract ( argObject, includeSchemas= None, includeObjectTypes= 
 	""" extract DDL scripts
 	"""
 	sqlRunner = getSqlRunnerForPrimaryDB()
+	extractScriptsFromDatabase( includeSchemas, includeObjectTypes, sqlRunner ) 
 
 def performActionDiff2Trees ( argObject, includeSchemas= None, includeObjectTypes= None ) :
 	""" 
