@@ -452,7 +452,7 @@ begin -- main
 			-- 
 		) LOOP
 			IF ddl_rec.seq_in_dir = 1 THEN
-				add1file( g_zipped_blob, ddl_rec.subdir, null ); -- add folder
+				add1file( g_zipped_blob, ddl_rec.subdir||'/', null ); -- add folder
 			END IF; -- create subdir
 				
 			DECLARE
@@ -465,6 +465,7 @@ begin -- main
 			BEGIN
 				dbms_lob.createtemporary( l_zip_part_blob, true );
 				l_lob_len :=  dbms_lob.getlength( ddl_rec.ddl );
+                dbms_output.put_line( 'Ln'||$$plsql_line||' lob len: '||l_lob_len );
 				dbms_lob.converttoblob(
 				  dest_lob       => l_zip_part_blob
 				  ,src_clob       =>        ddl_rec.ddl 
@@ -478,6 +479,7 @@ begin -- main
 				IF l_warning > 0 THEN 
 					RAISE_application_error( 20001, 'Got warning '||l_warning||' for '||ddl_rec.script_path );
 				END IF; -- CHECK warning	
+                dbms_output.put_line( 'Ln'||$$plsql_line||' '||dbms_lob.getlength( l_zip_part_blob ) );
 				add1file( g_zipped_blob, ddl_rec.script_path, l_zip_part_blob );
 
 				dbms_lob.freetemporary( l_zip_part_blob );
@@ -515,3 +517,5 @@ begin -- main
 
 end; --main 
 /
+
+set serveroutput on 

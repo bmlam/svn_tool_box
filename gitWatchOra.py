@@ -323,6 +323,7 @@ def getSqlRunnerForPrimaryDB():
 	# _dbx( host ); _dbx( service )
 	sqlRunner =  getOracSqlRunner( oraUser= g_primaryOraUser, password= password, host=host, port= port, service= service )
 
+	return sqlRunner
 
 ####
 def validateSettings ( argObject ):
@@ -402,6 +403,7 @@ end;
 def extractScriptsFromDatabase( includeSchemas, includeObjectTypes, sqlRunner ) :
 	"""Extract DDL scripts for the given schemas and object types from the given database
 	"""
+	_dbx( type( sqlRunner ) )
 	query = ' '.join( open( "./parameterized_extractor.sql", "r").readlines() )
 	_dbx(  query[ : 100] ) 
 
@@ -423,6 +425,20 @@ def extractScriptsFromDatabase( includeSchemas, includeObjectTypes, sqlRunner ) 
 
 	_infoTs( statsMsgs )
 
+	sqlRunner.execute( """SELECT content, 1 dummy FROM test_blob WHERE ROWNUM = 1 """ )
+	zipContent = sqlRunner.fetchone()[0]
+	_dbx( len( zipContent ) )
+	
+	tempFile = tempfile.mktemp()
+	_dbx( tempFile )
+	zipBasename = os.path.basename( tempFile ) + '.zip'
+	zipFile = os.path.join( os.path.dirname(tempFile), os.path.basename( tempFile ) + '.zip' )
+	_dbx( zipFile )
+	fh = open( zipFile, "wb" ); 
+	fh.write( zipContent ); 
+	fh.close()
+
+	return zipFile	
 
 ####
 def genUnixDiff ( oldPath, newPath, recursive= False ):
@@ -785,7 +801,7 @@ def assertDbSchemas ( connectUser, connectPassword, connectString, schemas ):
 		
 		_errorExit( "Following schemas do not exist at %s: %s" % ( connectString, ','.join( missingSchemas ) ) )
 
-
+###
 def getListOfRelevantSubfolders ( rootPath, dbName, includeSchemas, includeObjectTypes ):
 	""" we only want to perform certain tasks ("delete check" for example) on relevant
 	subfolders. This method returns the list of such subfolders
@@ -799,12 +815,19 @@ def getListOfRelevantSubfolders ( rootPath, dbName, includeSchemas, includeObjec
 
 	return subFolders
 
+###
 def performActionExtract ( argObject, includeSchemas= None, includeObjectTypes= None ) :
 	""" extract DDL scripts
 	"""
 	sqlRunner = getSqlRunnerForPrimaryDB()
-	extractScriptsFromDatabase( includeSchemas, includeObjectTypes, sqlRunner ) 
+	_dbx( type( sqlRunner ) )
+	zipFile = extractScriptsFromDatabase( includeSchemas, includeObjectTypes, sqlRunner ) 
+	_dbx( zipFile )
+	newPath = os.path.join( os.environ['HOME'], 'Downloads' , os.path.basename( zipFile ) )
+	_dbx( newPath )
+	shutil.move( zipFile, newPath)
 
+###
 def performActionDiff2Trees ( argObject, includeSchemas= None, includeObjectTypes= None ) :
 	""" 
 	"""
