@@ -405,14 +405,25 @@ def extractScriptsFromDatabase( includeSchemas, includeObjectTypes, sqlRunner ) 
 	"""Extract DDL scripts for the given schemas and object types from the given database
 	"""
 	_dbx( type( sqlRunner ) )
-	query = ' '.join( open( "./parameterized_extractor.sql", "r").readlines() )
-	_dbx(  query[ : 100] ) 
 
 	statsMsgs= []
 	if len( includeSchemas ) == 0:
 		_errorExit( "No schemas have been specified from which objects are to be extracted!"  )
+	elif len( includeSchemas ) > 1 :
+		_errorExit( "Currently only 1 schema per run is supported!" )
 	if len( includeObjectTypes ) == 0:
 		_errorExit( "No object types have been specified for which scripts are to be extracted" ) 
+
+	extractorZipperQuery = ' '.join( open( "./parameterizedExtractorZipper.sql", "r").readlines() )
+	_dbx(  extractorZipperQuery [ : 200] ) 
+
+	bindVar1 = ",".join( includeSchemas )
+	_dbx( bindVar1 )
+	bindVar2 = ",".join( includeObjectTypes )
+	_dbx( bindVar2 )
+	_dbx( type( bindVar2 ) )
+	# _errorExit( "test" )
+	sqlRunner.execute( extractorZipperQuery, [bindVar1, bindVar2] )
 
 	statsMsgs.append("Scripts are to be extracted for the following %d schemas:" % ( len( includeSchemas ) ) )
 	
@@ -426,7 +437,7 @@ def extractScriptsFromDatabase( includeSchemas, includeObjectTypes, sqlRunner ) 
 
 	_infoTs( statsMsgs )
 
-	sqlRunner.execute( """SELECT content, 1 dummy FROM test_blob WHERE ROWNUM = 1 """ )
+	sqlRunner.execute( """SELECT content, 1 dummy FROM temp_blobs WHERE ROWNUM = 1 """ )
 	zipContent = sqlRunner.fetchone()[0]
 	_dbx( len( zipContent ) )
 	

@@ -1,5 +1,29 @@
+--set serveroutput on 
 DECLARE
 --
+/*****  Copyright notes of zip handling code: *******************************
+Copyright (C) 2010,2011 by Anton Scheffer
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+*****************************************************************************/
+
   type file_list is table of clob;
   g_size_limit integer := power(2, 32);
   g_size_limit_sqlcode integer := -20200;
@@ -8,6 +32,29 @@ DECLARE
 --
   c_LOCAL_FILE_HEADER			constant raw(4) := hextoraw( '504B0304' ); -- Local file header signature
   c_END_OF_CENTRAL_DIRECTORY constant raw(4) := hextoraw( '504B0506' ); -- End of central directory signature
+--
+-- a very helpful function that should habe been provided in DBMS_STANDARD:
+FUNCTION lf_split_to_array ( pi_str VARCHAR2 )
+RETURN ora_mining_varchar2_nt
+AS
+-- test examle:
+-- begin
+--     for rec in ( select column_value cv from  table ( split_to_array ( 'a,12,355ghf' ) )
+--     )
+--     loop
+--         dbms_output.put_line ( rec.cv );
+--     end loop;
+-- end;
+
+	l_return  ora_mining_varchar2_nt := ora_mining_varchar2_nt();
+BEGIN
+	select regexp_substr( pi_str ,'[^,]+', 1, level)
+	BULK COLLECT INTO l_return
+	from dual
+    connect by regexp_substr( pi_str , '[^,]+', 1, level) is not null
+	;
+	return l_return;
+END lf_split_to_array;
 --
   function blob2num( p_blob blob, p_len integer, p_pos integer )
   return number
@@ -412,8 +459,12 @@ DECLARE
 begin -- main 
 	declare
 		g_zipped_blob blob;
+        l_owner all_objects.owner%TYPE ;
+        lt_object_type ora_mining_varchar2_nt ; 
 	begin
-
+        l_owner := :1;
+        lt_object_type := lf_split_to_array( :2 );
+        
 		FOR ddl_rec IN (
 			-- try not to edit this query but rather modify it as an SQL file so it is easier to test the changed made 
 			-- without testing this whole script!
@@ -436,7 +487,7 @@ begin -- main
 					WHEN 'TYPE'         THEN 'TPS'
 					WHEN 'TYPE BODY'    THEN 'TPB'
 					WHEN 'VIEW'         THEN 'VW'
-					ELSE '.SQL'
+					ELSE 'SQL'
 					END AS file_ext
 			        , owner||'/'||INITCAP(replace(object_type,' BODY')||'s' ) subdir
 			    FROM all_objects 
@@ -446,8 +497,8 @@ begin -- main
 			    , ROW_NUMBER() OVER (PARTITION BY subdir ORDER BY object_type, object_name ) seq_in_dir
 				,DBMS_METADATA.GET_DDL(object_type=> object_type, name=> object_name, schema=> owner ) ddl
 			FROM xform_otypes_ o
-			JOIN TABLE (  split_to_array( :2 ) ) selty ON selty.column_value = o.object_type 
-			WHERE owner = :1
+			JOIN TABLE (  lt_object_type ) selty ON selty.column_value = o.object_type 
+			WHERE owner = l_owner
             ORDER BY OWNER, object_type, object_name
 			-- 
 		) LOOP
@@ -462,13 +513,15 @@ begin -- main
 				l_lob_len  NUMBER(38); 
 				l_zip_part_blob  BLOB;
 				l_lang_context  NUMBER(38) := dbms_lob.default_lang_ctx;
+                l_ddl CLOB;
 			BEGIN
 				dbms_lob.createtemporary( l_zip_part_blob, true );
-				l_lob_len :=  dbms_lob.getlength( ddl_rec.ddl );
+                l_ddl := ddl_rec.ddl ||chr(10)||'/'||chr(10); -- make script runnable in SQLPLUS 
+				l_lob_len :=  dbms_lob.getlength( l_ddl );
                 dbms_output.put_line( 'Ln'||$$plsql_line||' lob len: '||l_lob_len );
 				dbms_lob.converttoblob(
 				  dest_lob       => l_zip_part_blob
-				  ,src_clob       =>        ddl_rec.ddl 
+				  ,src_clob       =>        l_ddl 
 				  ,amount         =>        l_lob_len
 				  ,dest_offset    =>	l_dest_offset
 				  ,src_offset     =>	l_src_offset
@@ -486,36 +539,19 @@ begin -- main
 			END add_file_to_zip;
 		END LOOP ; -- over ddl scripts
 
-		--add1file( g_zipped_blob, 'test4.txt', null ); -- a empty file
-		--add1file( g_zipped_blob, 'dir1/test1.txt', utl_raw.cast_to_raw( q'<A file with some more text, stored in a subfolder which isn't added>' ) );
-		--add1file( g_zipped_blob, 'dir2/', null ); -- a folder
-		--add1file( g_zipped_blob, 'dir3/test2.txt', utl_raw.cast_to_raw( 'A small filein a previous created folder' ) );
-
 		finish_zip( g_zipped_blob );
 		-- save_zip( g_zipped_blob, 'MY_DIR', 'my.zip' );
 		 dbms_output.put_line( 'Ln'||$$plsql_line||': '|| dbms_LOB.getlength ( g_zipped_blob ) );
 		
 		if true then 
-			execute immediate 'truncate table test_blob';
-			insert into test_blob ( content ) values ( g_zipped_blob );
+			execute immediate 'truncate table temp_blobs';
+			insert into temp_blobs ( content ) values ( g_zipped_blob );
 			commit;
 		end if;
 
 		dbms_lob.freetemporary( g_zipped_blob );
 	end;
 	--
---	declare
---		zip_files file_list;
---	begin
---		zip_files  := get_file_list( 'MY_DIR', 'my.zip' );
---		for i in zip_files.first() .. zip_files.last
---		loop
---		 dbms_output.put_line('Ln'||$$plsql_line||': '|| zip_files( i ) );
---		 dbms_output.put_line( utl_raw.cast_to_varchar2( get_file( 'MY_DIR', 'my.zip', zip_files( i ) ) ) );
---		end loop;
---	end; -- inner section of main as we need to declare local vars
 
 end; --main 
-/
 
-set serveroutput on 
