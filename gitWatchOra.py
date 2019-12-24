@@ -65,6 +65,7 @@ import svnHelper
 import sys
 import tempfile
 import time
+import zipfile
 
 g_myBaseName = os.path.basename( sys.argv[0] )
 
@@ -816,16 +817,29 @@ def getListOfRelevantSubfolders ( rootPath, dbName, includeSchemas, includeObjec
 	return subFolders
 
 ###
-def performActionExtract ( argObject, includeSchemas= None, includeObjectTypes= None ) :
+def performActionExtract ( argObject, includeSchemas= None, includeObjectTypes= None, stageZipInownloads= False ) :
 	""" extract DDL scripts
 	"""
+	global g_workAreaRoot
+
 	sqlRunner = getSqlRunnerForPrimaryDB()
 	_dbx( type( sqlRunner ) )
 	zipFile = extractScriptsFromDatabase( includeSchemas, includeObjectTypes, sqlRunner ) 
 	_dbx( zipFile )
-	newPath = os.path.join( os.environ['HOME'], 'Downloads' , os.path.basename( zipFile ) )
-	_dbx( newPath )
-	shutil.move( zipFile, newPath)
+
+	zipFileNoFileExt = os.path.basename ( zipFile )
+	zipFileNoFileExt = "".join( zipFile.split( '.') [: -1 ] )
+	_dbx( zipFileNoFileExt )
+
+	if stageZipInownloads:
+		unzipPath = os.path.join( os.environ['HOME'], 'Downloads' , os.path.basename( zipFileNoFileExt ) )
+	else:
+		unzipPath = os.path.join( g_workAreaRoot, os.path.basename( zipFileNoFileExt ) )
+	_dbx( unzipPath )
+	# shutil.move( zipFile, unzipPath)
+
+	with zipfile.ZipFile( zipFile ) as zf: zf.extractall( unzipPath  )
+	_infoTs( "zip file %s unzipped to %s" % ( zipFile, unzipPath ) )
 
 ###
 def performActionDiff2Trees ( argObject, includeSchemas= None, includeObjectTypes= None ) :
@@ -878,7 +892,7 @@ def main():
 		_errorExit( "Action %s is not yet implemented" % ( argObject.action ) )
 
 	if argObject.keep_work_area:
-		_infoTs( "Check tree beneath %s" % g_workAreaRoot )
+		pass
 	else:
 		shutil.rmtree( g_workAreaRoot )
 
