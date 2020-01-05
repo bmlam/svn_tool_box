@@ -5,7 +5,7 @@ from plstopa import FsmState, gettokentype, StateStack, TokenNode, TokenStack, T
 
 foo = "got here"
 
-g_dbxActive = False
+g_dbxActive = True
 g_dbxCnt = 0
 g_maxDbxMsg = 99600
 
@@ -31,9 +31,9 @@ def _errorExit ( text ):
 def fsm( inpLines ):
 	lnCnt = len ( inpLines )
 	_dbx( lnCnt )
-	lineNo = 1 
+	lineNo = 0
 
-	nodeStack = TokenStack(); curTreeNode = None
+	nodeStack = TokenStack(); curTreeId = None
 	stateStack = StateStack()
 
 	tokBuf = ""; interceptBufferLines = []; (interceptStartLineNo,interceptStartColNo) = (-1, -1 ); # just for clarity. First reference is when we hit block_comment_begin
@@ -48,10 +48,10 @@ def fsm( inpLines ):
 	curSta = FsmState.start
 	for line in inpLines [ :9999 ]:
 		colNo = 1; lineNo += 1 ; lnBuf = line; eoLine= False
-		if 	None == re.search( '^(\s*)$', lnBuf ): # match empty line
-			_dbx( 'Line %d is empty')
+		if 	None != re.search( '^(\s*)$', line ): # match empty line
+			_dbx( 'Line %d is empty' % lineNo )
 		else:
-			_dbx( "line %d len: %d. Line content >>>>>>>>> : %s" % ( lineNo, len( line ), line.rstrip("\n") ) )
+			_dbx( "line %d len: %d. Line content >>>>>>>>>%s" % ( lineNo, len( line ), line.rstrip("\n") ) )
 		i=0 
 		# do we need eoLine indeed or can we just bump colNo accordingly?
 		while ( i < 999 and colNo < len( line ) and not eoLine ) :  # process line with safety belt against infinite loop
@@ -62,19 +62,20 @@ def fsm( inpLines ):
 				if m == None:
 					_dbx( "need to cache block comment" )
 					interceptBufferLines.append( lnBuf )
-					colNo = len( line )
+					eoLine = True
 					continue 
 				else: # found end of block comment
 					interceptBufferLines.append( m.group(1) )
-					colNo += len( m.group(1) + m.group(2) ) ;  _dbx( colNo )
-					lnBuf = line[ colNo : ]; _dbx( "rest of line %d: %s" % ( lineNo, lnBuf.rstrip("\n")) )
-					curSta, curTreeNode = stateStack.pop()
-					node =  TokenNode( text= "".join( interceptBufferLines ), type= TokenType.block_comment_begin, staAtCreation= curSta, lineNo=-1, colNo=-1, parentId= curTreeNode ) 
+					colNo += len( m.group(1) + m.group(2) ) ;  _dbx( "found block comment end at col %d" %colNo )
+					lnBuf = line[ colNo : ]; _dbx( "stuff at comment is >> %s" % ( lnBuf.rstrip("\n")) )
+					curSta, curTreeId = stateStack.pop()
+					node =  TokenNode( text= "".join( interceptBufferLines ), type= TokenType.block_comment_begin, staAtCreation= curSta, lineNo=-1, colNo=-1, parentId= curTreeId ) 
 					nodeStack.push( node ); 
 
 					continue # while not EOL 
 
 			elif curSta == FsmState.in_single_quoted_literal:
+				_dbx( "scanning for end single quote in >>> %s " % lnBuf )
 				m = re.search( "^(.*)([']+)", lnBuf ) # match as many consecutive single quotes as available 
 				if m == None: # line break is part of string literal
 					interceptBufferLines.append( lnBuf ); eoLine = True # line is done
@@ -88,8 +89,8 @@ def fsm( inpLines ):
 					if singleQuoteChainLen % 2 == 0: # we only found escaped single quote
 						pass # do not transition 
 					else: # found end of single quoted literal, possibly with trailing escaped single quotes
-						curSta, curTreeNode = stateStack.pop()
-						node =  TokenNode( text= "".join( interceptBufferLines ), type= TokenType.single_quoted_literal_begin, staAtCreation= curSta, lineNo=-1, colNo=-1, parentId= curTreeNode ) 
+						curSta, curTreeId = stateStack.pop()
+						node =  TokenNode( text= "".join( interceptBufferLines ), type= TokenType.single_quoted_literal_begin, staAtCreation= curSta, lineNo=-1, colNo=-1, parentId= curTreeId ) 
 						nodeStack.push( node ); 
 
 					colNo += len( m.group(1) + m.group(2) ) ;  _dbx( colNo )
@@ -103,16 +104,16 @@ def fsm( inpLines ):
 				continue
 	
 			m = eng.match( lnBuf ) # _dbx( type( m ) )
-			_dbx( "lnBuf: %s" % lnBuf.rstrip("\n") )
+			_dbx( 'lnBuf>> %s' % lnBuf.rstrip("\n") )
 			if m == None:
 				# special scan for single quoted literal in a single quoted python pattern, there is problem to look for a single quote
 				# we had to single quote the pattern since we want to match double quoted indentifier
 				m = re.search( "^(\s*)(')", lnBuf ) # match single quote
 				if m != None: # found single quote
-					stateStack.push( curSta, curTreeNode  )
+					stateStack.push( curSta, curTreeId  )
 					curSta = FsmState.in_single_quoted_literal
 					interceptBufferLines = []; (interceptStartLineNo, interceptStartColNo) = (lineNo, colNo ); interceptBufferLines.append( m.group(2) )
-					colNo += len( m.group(1) + m.group(2) ) ;  _dbx( colNo )
+					colNo += len( m.group(1) + m.group(2) ) ; lnBuf = line[ colNo-1: ]; _dbx( colNo )
 
 					continue # we must skip the fine-grained FSM 
 				else:
@@ -136,7 +137,7 @@ def fsm( inpLines ):
 					if curSta == FsmState.find_block_comment_end: 
 						_errorExit ( "Encountered tokTyp %s while in state %s!" %( tokTyp, curSta) )
 					else: # found block_comment if the middle of somewhere, switch the parser to specifically search for end of comment
-						stateStack.push( curSta, curTreeNode )
+						stateStack.push( curSta, curTreeId )
 						curSta = FsmState.find_block_comment_end
 						interceptBufferLines = []; (interceptStartLineNo, interceptStartColNo) = (lineNo, colNo ); interceptBufferLines.append( tok )
 						_dbx( "we must skip the fine-grained FSM ")
@@ -146,8 +147,8 @@ def fsm( inpLines ):
 					if curSta == FsmState.in_single_line_comment: 
 						_errorExit ( "Encountered tokTyp %s while in state %s!" %( tokTyp, curSta) )
 					else: # not in wrong status, just push line comment node, no change of state 
-						stateStack.push( curSta, curTreeNode )
-						node =  TokenNode( text= lnBuf, type= TokenType.single_line_comment_begin, staAtCreation= curSta, lineNo=interceptStartLineNo, colNo=interceptStartColNo, parentId= curTreeNode ) 
+						stateStack.push( curSta, curTreeId )
+						node =  TokenNode( text= lnBuf, type= TokenType.single_line_comment_begin, staAtCreation= curSta, lineNo=interceptStartLineNo, colNo=interceptStartColNo, parentId= curTreeId ) 
 						eoLine = True
 						continue
 				#
@@ -156,104 +157,113 @@ def fsm( inpLines ):
 				if curSta == FsmState.start: 
 					if tokTyp == TokenType.relevant_keyword and normed == "CREATE":
 						curSta = FsmState.in_compilation_unit_header
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						curTreeNode = node.id
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curTreeId = node.id
 
 				elif curSta == FsmState.in_compilation_unit_header: 
 					if tokTyp == TokenType.relevant_keyword and normed == "AS":
 						curSta = FsmState.in_declaration
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						curTreeNode = node.id
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curTreeId = node.id
 					elif tokTyp == TokenType.semicolon: # forward declaration of function/procedure
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						curSta, curTreeNode = stateStack.pop()
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curSta, curTreeId = stateStack.pop()
 					else:
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 				elif curSta == FsmState.in_declaration: 
 					if tokTyp == TokenType.relevant_keyword and normed == "END": # a package/type body does NOT need to have a BEGIN section
 						curSta = FsmState.finalising_body 
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 					elif ( tokTyp == TokenType.relevant_keyword and( normed == "CURSOR" or normed == "TYPE" ) ) or tokTyp == TokenType.ident :
-						stateStack.push( curSta, curTreeNode )
+						stateStack.push( curSta, curTreeId )
 						curSta = FsmState.started_declaration_entry 
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						curTreeNode = node.id
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curTreeId = node.id
 					elif ( tokTyp == TokenType.relevant_keyword and( normed == "PROCEDURE" or normed == "FUNCTION" ) ):
-						stateStack.push( curSta, curTreeNode  )
+						stateStack.push( curSta, curTreeId  )
 						curSta = FsmState.in_compilation_unit_header
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						curTreeNode = node.id
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curTreeId = node.id
 					elif ( tokTyp == TokenType.relevant_keyword and( normed == "BEGIN" ) ):
 						curSta = FsmState.in_body
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						curTreeNode = node.id
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curTreeId = node.id
 
 					else : _errorExit( "got unexpected input")
 				elif curSta == FsmState.started_declaration_entry: 
 					if tokTyp == TokenType.semicolon:
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						curSta, curTreeNode = stateStack.pop() 
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curSta, curTreeId = stateStack.pop() 
 					#elif ( tokTyp == TokenType.single_quoted_literal_begin ):
 					else: 
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						# curSta and curTreeNode  not changed
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						# curSta and curTreeId  not changed
 				elif curSta == FsmState.in_body: 
 					if tokTyp == TokenType.relevant_keyword and ( normed == "END" ):
 						curSta = FsmState.finalising_body
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						# curTreeNode not changed
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						# curTreeId not changed
 					elif tokTyp == TokenType.relevant_keyword and ( normed == "BEGIN" ):
-						stateStack.push( curSta, curTreeNode)
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						curTreeNode = node.id
+						stateStack.push( curSta, curTreeId)
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curTreeId = node.id
 					elif tokTyp == TokenType.relevant_keyword and  normed in set( 'IF', 'FOR' )  :
-						stateStack.push( curSta, curTreeNode)
+						stateStack.push( curSta, curTreeId)
 						curSta = FsmState.in_control_block_header
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						curTreeNode = node.id
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curTreeId = node.id
 					else:
-						stateStack.push( curSta, curTreeNode)
+						stateStack.push( curSta, curTreeId)
 						curSta = FsmState.in_body_entry_other
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						curTreeNode = node.id
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curTreeId = node.id
 				elif curSta == FsmState.in_control_block_header: 
 					if tokTyp == TokenType.relevant_keyword and normed in set ( ['LOOP', 'THEN' ]) :
 						curSta = FsmState.in_body 
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 					else: 
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						# curSta and curTreeNode  not changed
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						# curSta and curTreeId  not changed
 				elif curSta == FsmState.in_body_entry_other: 
 					if tokTyp == TokenType.semicolon :
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						curSta, curTreeNode = stateStack.pop()
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curSta, curTreeId = stateStack.pop()
 					if tokTyp == TokenType.left_bracket :
-						stateStack.push( curSta, curTreeNode)
+						stateStack.push( curSta, curTreeId)
 						curSta = FsmState.in_bracket 
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						curTreeNode = node.id 
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curTreeId = node.id 
 					else:
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						# curSta and curTreeNode  not changed
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						# curSta and curTreeId  not changed
 				elif curSta == FsmState.in_bracket: 
 					if tokTyp == TokenType.right_bracket :
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						curSta, curTreeNode = stateStack.pop()
-						# curSta and curTreeNode  not changed
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curSta, curTreeId = stateStack.pop()
+					# what should we do here? elif tokTyp == TokenType.comma :
+					elif tokTyp == TokenType.left_bracket :
+						# no change of state but we have a new tree and we are blink to what is comming!
+						stateStack.push( curSta, curTreeId)
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curTreeId = node.id 
 					else:
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 				elif curSta == FsmState.finalising_body: 
 					if tokTyp == TokenType.ident :
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						# curSta not changed, curTreeNode not changed
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						# curSta not changed, curTreeId not changed
 					elif tokTyp == TokenType.semicolon :
-						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeNode ) 
-						curSta, curTreeNode = stateStack.pop()
+						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
+						curSta, curTreeId = stateStack.pop()
 				else:						
 					_errorExit( "No transition for state %s with input %s " % ( curSta, tokTyp) )
 				
 				_dbx( "sta at end of pass: %s"  % curSta )
 				nodeStack.push( node )
+	_dbx( "node at finnal: %d" % curTreeId )
+	if curTreeId != None:
+		nodeAtFinal = nodeStack.peek( curTreeId )
+		nodeAtFinal.showInfo()
 	if curSta in set( [ FsmState.in_declaration ] ):
 		_infoTs( "final state is ok")
 	else:

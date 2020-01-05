@@ -1,6 +1,6 @@
 import enum, inspect, re 
 
-g_dbxActive = False
+g_dbxActive = True
 g_dbxCnt = 0
 g_maxDbxMsg = 9999
 
@@ -168,7 +168,7 @@ class TokenStack:
 		pass
 
 	def push ( self, elem ):
-		_dbx( "pushing node with info ..." )
+		_dbx( "pushing node with text %s ..." % elem.text )
 		# elem.showInfo()
 		self.arr.append ( elem )
 		self.tokenCnt += 1 
@@ -202,6 +202,11 @@ class TokenStack:
 					else:
 						print( ' '.join( textGroup ) )
 						prevParent = None;	textGroup = []
+
+	def peek( self, id ):
+		for elem in self.arr:
+			if elem.id == id: return elem
+		
 
 ######
 class StateStack:
@@ -240,6 +245,7 @@ def gettokentype( str ):
 		normed = str  # send back original case 
 	elif str         == '/*': typ = TokenType.block_comment_begin
 	elif str         == '.' : typ = TokenType.dot_operator
+	elif str         == ',' : typ = TokenType.comma
 	elif str         == '=' : typ = TokenType.comparison_operator
 	elif str         == ';' : typ = TokenType.semicolon
 	elif str         == '+' : typ = TokenType.arith_operator
