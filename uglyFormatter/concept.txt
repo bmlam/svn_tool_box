@@ -1,0 +1,32 @@
+the UglyFormatter is supposed to format PLSQL solely for the purpose of providing consistent output given tbe same input
+
+this formatter can implemented in Python or PLSQL
+
+*use a stack to store the token nodes
+*we distiguish tree node and leaf nodes. 
+*The following are tree nodes:
+	**package spec
+	**package body
+	**anonyumous block
+	**assignment
+	**method call 
+*The following are leaf nodes:
+	** comments
+	** identifier
+	** arimetric operators
+	** assignment operator
+	** comparision operator
+	** unary operator
+*Each token node has these properties:
+	**unique id from sequence
+	**text
+	**token type
+	**is tree of leaf (derived from token type)
+	**self text length
+	**tree text length if self is a tree node.  The tree root node has the total length of all child nodes.
+	**parent node is if applicable
+*the stack is populated until the end of a compilation unit.
+*the stack is discharged LIFO.
+*A node class is defined to be used as elements of the stack.
+
+

@@ -23,7 +23,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 *****************************************************************************/
-
+-- prerequisite
+--create global temporary table temp_blobs ( id number, content blob ) on commit preserve rows;
   type file_list is table of clob;
   g_size_limit integer := power(2, 32);
   g_size_limit_sqlcode integer := -20200;
@@ -459,11 +460,11 @@ END lf_split_to_array;
 begin -- main 
 	declare
 		g_zipped_blob blob;
-        l_owner all_objects.owner%TYPE ;
-        lt_object_type ora_mining_varchar2_nt ; 
+        lt_owner  		ora_mining_varchar2_nt ; 
+        lt_object_type 	ora_mining_varchar2_nt ; 
 	begin
-        l_owner := :1;
-        lt_object_type := lf_split_to_array( :2 );
+        lt_owner 		:= lf_split_to_array( :1 );
+        lt_object_type 	:= lf_split_to_array( :2 );
         
 		FOR ddl_rec IN (
 			-- try not to edit this query but rather modify it as an SQL file so it is easier to test the changed made 
@@ -490,7 +491,10 @@ begin -- main
 					ELSE 'SQL'
 					END AS file_ext
 			        , owner||'/'||INITCAP(replace(object_type,' BODY')||'s' ) subdir
-			    FROM all_objects 
+			    FROM /*replace_start*/ all_objects /*replace_end*/ o
+				JOIN TABLE (  lt_owner ) selow ON selow.column_value = o.owner
+				WHERE NOT object_name like '%$$%' -- exclude system gerated objects
+				  AND NOT object_name like 'BIN$%' -- exclude stuff in recycle bin 
 			)
 			SELECT object_type, object_name, subdir
 			    , subdir||'/'||object_name||'.'||file_ext script_path
@@ -498,7 +502,6 @@ begin -- main
 				,DBMS_METADATA.GET_DDL(object_type=> object_type, name=> object_name, schema=> owner ) ddl
 			FROM xform_otypes_ o
 			JOIN TABLE (  lt_object_type ) selty ON selty.column_value = o.object_type 
-			WHERE owner = l_owner
             ORDER BY OWNER, object_type, object_name
 			-- 
 		) LOOP
@@ -544,7 +547,7 @@ begin -- main
 		 dbms_output.put_line( 'Ln'||$$plsql_line||': '|| dbms_LOB.getlength ( g_zipped_blob ) );
 		
 		if true then 
-			execute immediate 'truncate table temp_blobs';
+			delete temp_blobs;
 			insert into temp_blobs ( content ) values ( g_zipped_blob );
 			commit;
 		end if;

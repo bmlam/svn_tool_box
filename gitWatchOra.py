@@ -61,7 +61,6 @@ import re
 import os
 import shutil
 import subprocess
-import svnHelper
 import sys
 import tempfile
 import time
@@ -84,8 +83,6 @@ g_supportedObjectTypes= [
 	, 'TYPE' 
 	, 'VIEW' 
 	]
-
-g_spoolTargetMarker = '#+?Sp00lTargetMark3r:'
 
 g_envVarNamePrimarySecret  = 'PRIMARY_SECRET' 
 g_envVarNameSecondarySecret= 'SECONDARY_SECRET' 
@@ -113,21 +110,24 @@ g_validFilterNames = [cfgParamKeyIncludeSchema, cfgParamKeyIncludeObjectType
 	, cfgParamKeyPrimaryConnectString, cfgParamKeyPrimaryOraUser
 	]
 g_standardCommitMessage = ""
-g_dbxCnt = 1
+
+g_dbxActive = False
+g_dbxCnt = 0
 g_maxDbxMsg = 999
 
 def _dbx ( text ):
-	global g_dbxCnt
-	print( 'dbx: %s - Ln%d: %s' % ( inspect.stack()[1][3], inspect.stack()[1][2], text ) )
-	g_dbxCnt += 1
-	if g_dbxCnt > g_maxDbxMsg:
-		_errorExit( "g_maxDbxMsg of %d exceeded" % g_maxDbxMsg )
+	global g_dbxCnt , g_dbxActive
+	if g_dbxActive :
+		print( 'dbx: %s - Ln%d: %s' % ( inspect.stack()[1][3], inspect.stack()[1][2], text ) )
+		g_dbxCnt += 1
+		if g_dbxCnt > g_maxDbxMsg:
+			_errorExit( "g_maxDbxMsg of %d exceeded" % g_maxDbxMsg )
 
 def _infoTs ( text , withTs = False ):
 	if withTs :
 		print( '%s (Ln%d) %s' % ( time.strftime("%H:%M:%S"), inspect.stack()[1][2], text ) )
 	else :
-		print( '(Ln%d) %s' % ( inspect.stack()[1][2], text ) )
+		print( '(Ln%d) %s' % ( inspect.stack1G()[1][2], text ) )
 
 def _errorExit ( text ):
 	print( 'ERROR raised from %s - Ln%d: %s' % ( inspect.stack()[1][3], inspect.stack()[1][2], text ) )
@@ -411,20 +411,10 @@ def extractScriptsFromDatabase( includeSchemas, includeObjectTypes, sqlRunner ) 
 		_errorExit( "No schemas have been specified from which objects are to be extracted!"  )
 	elif len( includeSchemas ) > 1 :
 		_errorExit( "Currently only 1 schema per run is supported!" )
+	includeOTypeUsed = includeObjectTypes
 	if len( includeObjectTypes ) == 0:
-		_errorExit( "No object types have been specified for which scripts are to be extracted" ) 
-
-	extractorZipperQuery = ' '.join( open( "./parameterizedExtractorZipper.sql", "r").readlines() )
-	_dbx(  extractorZipperQuery [ : 200] ) 
-
-	bindVar1 = ",".join( includeSchemas )
-	_dbx( bindVar1 )
-	bindVar2 = ",".join( includeObjectTypes )
-	_dbx( bindVar2 )
-	_dbx( type( bindVar2 ) )
-	# _errorExit( "test" )
-	sqlRunner.execute( extractorZipperQuery, [bindVar1, bindVar2] )
-
+		includeOTypeUsed = g_supportedObjectTypes
+		
 	statsMsgs.append("Scripts are to be extracted for the following %d schemas:" % ( len( includeSchemas ) ) )
 	
 	for schema in includeSchemas: 
@@ -435,7 +425,22 @@ def extractScriptsFromDatabase( includeSchemas, includeObjectTypes, sqlRunner ) 
 
 	# _dbx( len( includeObjectTypes ) )
 
-	_infoTs( statsMsgs )
+	_infoTs( "\n".join( statsMsgs ) , True )
+
+	extractorZipperQuery = ' '.join( open( "./parameterizedExtractorZipper.sql", "r").readlines() )
+	_dbx(  extractorZipperQuery [ : 200] ) 
+	_dbx(  len( extractorZipperQuery ) )
+	if g_useDbaViews: # so far o  Oracle, only SELECT_CATALOG_ROLE (and dba_objects maybe not) are required!
+		extractorZipperQuery = extractorZipperQuery.replace( '/*replace_start*/ all_objects /*replace_end*/', ' dba_objects ' ) 
+		_dbx(  len( extractorZipperQuery ) )
+
+	bindVar1 = ",".join( includeSchemas )
+	_dbx( bindVar1 )
+	bindVar2 = ",".join( includeObjectTypes )
+	_dbx( bindVar2 )
+	_dbx( type( bindVar2 ) )
+	# _errorExit( "test" )
+	sqlRunner.execute( extractorZipperQuery, [bindVar1, bindVar2] )
 
 	sqlRunner.execute( """SELECT content, 1 dummy FROM temp_blobs WHERE ROWNUM = 1 """ )
 	zipContent = sqlRunner.fetchone()[0]
@@ -517,14 +522,7 @@ def compareTwoTreesReturnFile( treeA, treeB, expressiveNameA, expressiveNameB, c
 					buddyBDoesNotExist.append( relPath )
 				elif os.path.isfile( fullPathB ):
 					if copyBFilesToAAndDiff:
-						shutil.copyfile( fullPathB, fullPathA )
-						svnRc, msgLines, errLinesFromSvn = svnHelper.svnQuery ( ['diff', relPath ] )
-						if svnRc != 0 :
-							_infoTs( "Function %s got error code %d from svn." % ( _func_(), svnRc ) )
-							if len( errLinesFromSvn ) > 0:
-								_infoTs( "Error output:" )
-								for errLine in errLinesFromSvn: print(  errLine )
-							_errorExit( 'aborting due to previous error' )
+						pass # shutil.copyfile( fullPathB, fullPathA )
 					else:
 						msgLines= genUnixDiff( oldPath= fullPathA, newPath= fullPathB )
 
