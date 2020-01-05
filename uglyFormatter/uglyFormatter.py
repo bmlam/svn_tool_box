@@ -1,6 +1,7 @@
-#!/usr/bin/python3
+#!/Library/Frameworks/Python.framework/Versions/3.8/bin/python3
 """ 
 on AirBook : 
+#!/usr/bin/python3
 on iMac:
 #!/Library/Frameworks/Python.framework/Versions/3.8/bin/python3
 

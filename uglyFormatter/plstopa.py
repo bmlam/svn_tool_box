@@ -262,7 +262,7 @@ def gettokentype( str ):
 		#_dbx( foo )
 		m = re.search( "^[a-z0-9_]+$" , str) 
 		if m != None : 
-			_dbx( foo )
+			#_dbx( foo )
 			typ = TokenType.ident
 
 	return typ, normed

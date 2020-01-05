@@ -27,7 +27,28 @@ def _errorExit ( text ):
 	print( 'ERROR raised from %s - Ln%d: %s' % ( inspect.stack()[1][3], inspect.stack()[1][2], text ) )
 	sys.exit(1)
 
-
+def findConsecutiveSinqleQuotes( str ):
+	""" emulate a regex search that returns group(1) and group(2)
+	group(1): stuff before the first single quote
+	group(2): one or more single quotes. 
+	in case no single quote is found, group(2) = None
+	"""
+	firstOcc = str.find( "'")
+	if firstOcc < 0 :
+		return None, None
+	else:
+		g2 = "'"
+		# found first one, continue to find more
+		for ch in str[ firstOcc + 1 : ]:
+			if ch == "'":
+				g2 = g2 + "'"
+			else:
+				if firstOcc == 0:
+					return None, g2
+				else:
+					return str[0:firstOcc-1], g2
+				
+		
 def fsm( inpLines ):
 	lnCnt = len ( inpLines )
 	_dbx( lnCnt )
@@ -65,7 +86,7 @@ def fsm( inpLines ):
 					eoLine = True
 					continue 
 				else: # found end of block comment
-					interceptBufferLines.append( m.group(1) )
+					interceptBufferLines.append( m.group(1) + m.group(2) )
 					colNo += len( m.group(1) + m.group(2) ) ;  _dbx( "found block comment end at col %d" %colNo )
 					lnBuf = line[ colNo : ]; _dbx( "stuff at comment is >> %s" % ( lnBuf.rstrip("\n")) )
 					curSta, curTreeId = stateStack.pop()
@@ -76,25 +97,27 @@ def fsm( inpLines ):
 
 			elif curSta == FsmState.in_single_quoted_literal:
 				_dbx( "scanning for end single quote in >>> %s " % lnBuf )
-				m = re.search( "^(.*)([']+)", lnBuf ) # match as many consecutive single quotes as available 
-				if m == None: # line break is part of string literal
+				# this does not work! :   m = re.search( r"^([^']*)([']+)([^'])$", lnBuf ) # match as many consecutive single quotes as available
+				g1, g2 = findConsecutiveSinqleQuotes( lnBuf )
+				if g2 == None: # line break is part of string literal
 					interceptBufferLines.append( lnBuf ); eoLine = True # line is done
 				else: # found one or several single quote 
-					_dbx( "before quote chain: %s " % m.group(1) )
-					_dbx( "quote chain: %s " % m.group(2) )
-					singleQuoteChainLen = len( m.group(2) )
+					_dbx( "len g1:%s g2:%s" % (len(g1), len(g2) ) )
+					_dbx( "before quote chain, len:%d >>>%s " % (len(g1), g1 ) )
+					_dbx( "quote chain: %s " % g2 )
+					singleQuoteChainLen = len( g2 )
 					tempBufLine = interceptBufferLines[-1]
-					tempBufLine = tempBufLine + m.group(1) + m.group(2)
+					tempBufLine = tempBufLine + g1 + g2
 					interceptBufferLines[-1] = tempBufLine # may be we can do without a temp variable?
 					if singleQuoteChainLen % 2 == 0: # we only found escaped single quote
 						pass # do not transition 
 					else: # found end of single quoted literal, possibly with trailing escaped single quotes
 						curSta, curTreeId = stateStack.pop()
-						node =  TokenNode( text= "".join( interceptBufferLines ), type= TokenType.single_quoted_literal_begin, staAtCreation= curSta, lineNo=-1, colNo=-1, parentId= curTreeId ) 
+						literalText = "".join( interceptBufferLines )
+						node =  TokenNode( text= literalText, type= TokenType.single_quoted_literal_begin, staAtCreation= curSta, lineNo=-1, colNo=-1, parentId= curTreeId ) 
 						nodeStack.push( node ); 
-
-					colNo += len( m.group(1) + m.group(2) ) ;  _dbx( colNo )
-					continue
+					colNo += len( literalText ) ;  lnBuf= line[ colNo-1:];  _dbx( "lnBuf>>>%s" % lnBuf )
+				continue
 				
 			m = re.search( '^(\s*)$', lnBuf ) # match empty line
 			if m != None:
@@ -128,7 +151,7 @@ def fsm( inpLines ):
 				colNo += len( m.group( 1 ) ) + len( m.group( 2 ) ) + len( m.group( 3 ) ) ;  # _dbx( "colNo: %d" % colNo )
 
 				_dbx( "Ln/col %d/%d raw tok:  '%s'" % ( lineNo, colNo, tok ) )
-				lnBuf = line[ colNo - 1: ]; _dbx( "rest of line: %s" % lnBuf.rstrip("\n") )
+				lnBuf = line[ colNo - 1: ]; # _dbx( "rest of line: %s" % lnBuf.rstrip("\n") )
 		
 				tokTyp, normed = gettokentype( tok ); 
 				_dbx( "tokTyp:  %s normed: '%s'" % ( tokTyp, normed  ) )
