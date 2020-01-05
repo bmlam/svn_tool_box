@@ -168,17 +168,17 @@ class TokenStack:
 		pass
 
 	def push ( self, elem ):
-		_dbx( "pushing node with text %s ..." % elem.text )
+		_dbx( "pushing node with text >>>%s" % elem.text )
 		# elem.showInfo()
 		self.arr.append ( elem )
 		self.tokenCnt += 1 
 
-	def pop ( self ):
-		rv = self.arr[ -1 ]
-		self.arr = self.arr[ : -1 ]
-		_dbx( "popping node with info ..." )
-		rv.showInfo()
-		return rv
+	#def pop ( self ):
+	#	rv = self.arr[ -1 ]
+	#	self.arr = self.arr[ : -1 ]
+	#	_dbx( "popping node with info ..." )
+	#	rv.showInfo()
+	#	return rv
 
 	def showInfo(self): #method
 		if self.tokenCnt == 0:
@@ -206,7 +206,7 @@ class TokenStack:
 	def peek( self, id ):
 		for elem in self.arr:
 			if elem.id == id: return elem
-		
+
 
 ######
 class StateStack:
@@ -216,13 +216,13 @@ class StateStack:
 
 	def push ( self, state, parentId ):
 		self.arr.append ( (state, parentId) )
-		_dbx( "added state %s parent %s. elemCnt %d" % ( state, parentId, len( self.arr ) ) )
+		_dbx( "PUSHING state  >>>>>>%s   parent:%s. elemCnt %d" % ( state, parentId, len( self.arr ) ) )
 
 	def pop ( self ):
 		rv = self.arr[ -1 ]
 		self.arr = self.arr[ : -1 ]
 		state, parentId = rv 
-		_dbx( "returning state %s parent %s. elemCnt %d" % ( state, parentId, len( self.arr ) ) )
+		_dbx( "POPPING state >>>>>>%s parent %s. elemCnt %d" % ( state, parentId, len( self.arr ) ) )
 		return state, parentId
 		
 	def showInfo(self): #method

@@ -10,8 +10,8 @@ AS
    c_spec_version   CONSTANT VARCHAR2 (1024) := '$Id: pkg_parse_tns-def.sql 26969 2016-09-27 15:05:24Z Lam.Bon-Minh $';
    c_body_version            VARCHAR2 (1024);
 
-function clob_2_token_table 
-return tns_entry_token_table ;
+--function clob_2_token_table 
+--return tns_entry_token_table ;
 
 --    * $Id: pkg_parse_tns-impl.sql 26969 2016-09-27 15:05:24Z Lam.Bon-Minh $
 --    * $HeadURL: https://bic-svn.viola.local/repo/BIC-repo/dba/admin/tns_names_central/dwso/tnsparser/packages/pkg_parse_tns/pkg_parse_tns-impl.sql $

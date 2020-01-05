@@ -162,29 +162,36 @@ def fsm( inpLines ):
 
 				elif curSta == FsmState.in_compilation_unit_header: 
 					if tokTyp == TokenType.relevant_keyword and normed == "AS":
+						_dbx( foo )
 						curSta = FsmState.in_declaration
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curTreeId = node.id
 					elif tokTyp == TokenType.semicolon: # forward declaration of function/procedure
+						_dbx( foo )
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curSta, curTreeId = stateStack.pop()
 					else:
+						_dbx( foo )
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 				elif curSta == FsmState.in_declaration: 
 					if tokTyp == TokenType.relevant_keyword and normed == "END": # a package/type body does NOT need to have a BEGIN section
+						_dbx( foo )
 						curSta = FsmState.finalising_body 
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 					elif ( tokTyp == TokenType.relevant_keyword and( normed == "CURSOR" or normed == "TYPE" ) ) or tokTyp == TokenType.ident :
+						_dbx( foo )
 						stateStack.push( curSta, curTreeId )
 						curSta = FsmState.started_declaration_entry 
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curTreeId = node.id
 					elif ( tokTyp == TokenType.relevant_keyword and( normed == "PROCEDURE" or normed == "FUNCTION" ) ):
+						_dbx( foo )
 						stateStack.push( curSta, curTreeId  )
 						curSta = FsmState.in_compilation_unit_header
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curTreeId = node.id
 					elif ( tokTyp == TokenType.relevant_keyword and( normed == "BEGIN" ) ):
+						_dbx( foo )
 						curSta = FsmState.in_body
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curTreeId = node.id
@@ -192,40 +199,49 @@ def fsm( inpLines ):
 					else : _errorExit( "got unexpected input")
 				elif curSta == FsmState.started_declaration_entry: 
 					if tokTyp == TokenType.semicolon:
+						_dbx( foo )
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curSta, curTreeId = stateStack.pop() 
 					#elif ( tokTyp == TokenType.single_quoted_literal_begin ):
 					else: 
+						_dbx( foo )
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						# curSta and curTreeId  not changed
 				elif curSta == FsmState.in_body: 
 					if tokTyp == TokenType.relevant_keyword and ( normed == "END" ):
+						_dbx( foo )
 						curSta = FsmState.finalising_body
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						# curTreeId not changed
 					elif tokTyp == TokenType.relevant_keyword and ( normed == "BEGIN" ):
+						_dbx( foo )
 						stateStack.push( curSta, curTreeId)
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curTreeId = node.id
 					elif tokTyp == TokenType.relevant_keyword and  normed in set( 'IF', 'FOR' )  :
+						_dbx( foo )
 						stateStack.push( curSta, curTreeId)
 						curSta = FsmState.in_control_block_header
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curTreeId = node.id
 					else:
+						_dbx( foo )
 						stateStack.push( curSta, curTreeId)
 						curSta = FsmState.in_body_entry_other
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curTreeId = node.id
 				elif curSta == FsmState.in_control_block_header: 
 					if tokTyp == TokenType.relevant_keyword and normed in set ( ['LOOP', 'THEN' ]) :
+						_dbx( foo )
 						curSta = FsmState.in_body 
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 					else: 
+						_dbx( foo )
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						# curSta and curTreeId  not changed
 				elif curSta == FsmState.in_body_entry_other: 
 					if tokTyp == TokenType.semicolon :
+						_dbx( foo )
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curSta, curTreeId = stateStack.pop()
 					if tokTyp == TokenType.left_bracket :
@@ -234,25 +250,31 @@ def fsm( inpLines ):
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curTreeId = node.id 
 					else:
+						_dbx( foo )
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						# curSta and curTreeId  not changed
 				elif curSta == FsmState.in_bracket: 
 					if tokTyp == TokenType.right_bracket :
+						_dbx( foo )
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curSta, curTreeId = stateStack.pop()
 					# what should we do here? elif tokTyp == TokenType.comma :
 					elif tokTyp == TokenType.left_bracket :
+						_dbx( foo )
 						# no change of state but we have a new tree and we are blink to what is comming!
 						stateStack.push( curSta, curTreeId)
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curTreeId = node.id 
 					else:
+						_dbx( foo )
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 				elif curSta == FsmState.finalising_body: 
 					if tokTyp == TokenType.ident :
+						_dbx( foo )
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						# curSta not changed, curTreeId not changed
 					elif tokTyp == TokenType.semicolon :
+						_dbx( foo )
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curSta, curTreeId = stateStack.pop()
 				else:						
