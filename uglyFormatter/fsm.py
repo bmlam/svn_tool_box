@@ -27,27 +27,32 @@ def _errorExit ( text ):
 	print( 'ERROR raised from %s - Ln%d: %s' % ( inspect.stack()[1][3], inspect.stack()[1][2], text ) )
 	sys.exit(1)
 
-def findConsecutiveSinqleQuotes( str ):
-	""" emulate a regex search that returns group(1) and group(2)
-	group(1): stuff before the first single quote
-	group(2): one or more single quotes. 
-	in case no single quote is found, group(2) = None
+###
+def scanEndOfSQLiteral( str ):
+	""" this function is called when FSM found a single quote which starts a single quoted literal.
+	We are to return True, <port of literal> if the closing single quote is found within the input. Note that intermediate pairs of of single quotes may occur inside and even at the end of the second return value
+	We are to return False, None if the closing single quote is NOT found within the input
 	"""
-	firstOcc = str.find( "'")
-	if firstOcc < 0 :
-		return None, None
+	_dbx ( "input len:%d >>>%s" % ( len(str), str ) )
+	ix = 0; part = ""; endFound = False
+	while ix < len ( str ) and not endFound :
+		# print("dbx  ix:%d ch:%s" % ( ix, str[ ix ] ) )
+		if str[ ix ] == "'":
+			if str[ ix : ].find( "''" ) == 0 : # found two, at least
+				# print( "found 2" )
+				part += "''"; ix += 2
+			else: # ok only found one
+				# print( "found 1" )
+				part += "'"; ix +=1; endFound = True
+		else:
+				part += str[ ix ]; ix +=1
+		
+	if endFound: 
+		rv1, rv2 = True, part
 	else:
-		g2 = "'"
-		# found first one, continue to find more
-		for ch in str[ firstOcc + 1 : ]:
-			if ch == "'":
-				g2 = g2 + "'"
-			else:
-				if firstOcc == 0:
-					return None, g2
-				else:
-					return str[0:firstOcc-1], g2
-				
+		rv1, rv2 = False, None
+	_dbx( "rv1:%s, rv2>>%s" % ( rv1, rv2) )
+	return rv1, rv2
 		
 def fsm( inpLines ):
 	lnCnt = len ( inpLines )
@@ -56,7 +61,7 @@ def fsm( inpLines ):
 
 	nodeStack = TokenStack(); curTreeId = None
 	stateStack = StateStack()
-
+  
 	tokBuf = ""; interceptBufferLines = []; (interceptStartLineNo,interceptStartColNo) = (-1, -1 ); # just for clarity. First reference is when we hit block_comment_begin
 # match for alphanumString  OR dblQuotedAlphanumString OR assignment OR singleEqual OR doubleEqual OR dotOperator
 	#    match 	macros 
@@ -98,25 +103,17 @@ def fsm( inpLines ):
 			elif curSta == FsmState.in_single_quoted_literal:
 				_dbx( "scanning for end single quote in >>> %s " % lnBuf )
 				# this does not work! :   m = re.search( r"^([^']*)([']+)([^'])$", lnBuf ) # match as many consecutive single quotes as available
-				g1, g2 = findConsecutiveSinqleQuotes( lnBuf )
-				if g2 == None: # line break is part of string literal
-					interceptBufferLines.append( lnBuf ); eoLine = True # line is done
-				else: # found one or several single quote 
-					_dbx( "len g1:%s g2:%s" % (len(g1), len(g2) ) )
-					_dbx( "before quote chain, len:%d >>>%s " % (len(g1), g1 ) )
-					_dbx( "quote chain: %s " % g2 )
-					singleQuoteChainLen = len( g2 )
-					tempBufLine = interceptBufferLines[-1]
-					tempBufLine = tempBufLine + g1 + g2
-					interceptBufferLines[-1] = tempBufLine # may be we can do without a temp variable?
-					if singleQuoteChainLen % 2 == 0: # we only found escaped single quote
-						pass # do not transition 
-					else: # found end of single quoted literal, possibly with trailing escaped single quotes
+				endOfLitFound, partOfLit = scanEndOfSQLiteral( lnBuf )
+				if not endOfLitFound: # line break is part of string literal
+					interceptBufferLines.append( lnBuf )
+					eoLine = True # line is done
+				else: # found end of literal in line, possibly with rest not belonging to literal
 						curSta, curTreeId = stateStack.pop()
+						interceptBufferLines.append( partOfLit )
 						literalText = "".join( interceptBufferLines )
 						node =  TokenNode( text= literalText, type= TokenType.single_quoted_literal_begin, staAtCreation= curSta, lineNo=-1, colNo=-1, parentId= curTreeId ) 
 						nodeStack.push( node ); 
-					colNo += len( literalText ) ;  lnBuf= line[ colNo-1:];  _dbx( "lnBuf>>>%s" % lnBuf )
+						colNo += len( partOfLit ) ;  lnBuf= line[ colNo-1:];  _dbx( "lnBuf>>>%s" % lnBuf )
 				continue
 				
 			m = re.search( '^(\s*)$', lnBuf ) # match empty line
@@ -179,6 +176,7 @@ def fsm( inpLines ):
 				#
 				if curSta == FsmState.start: 
 					if tokTyp == TokenType.relevant_keyword and normed == "CREATE":
+						stateStack.push( curSta, curTreeId ) # at the end, we want to pop back this without the stack hitting index out of range 
 						curSta = FsmState.in_compilation_unit_header
 						node =  TokenNode( text= normed, type= tokTyp, staAtCreation= curSta, lineNo=lineNo, colNo=colNo, parentId= curTreeId ) 
 						curTreeId = node.id
@@ -305,11 +303,11 @@ def fsm( inpLines ):
 				
 				_dbx( "sta at end of pass: %s"  % curSta )
 				nodeStack.push( node )
-	_dbx( "node at finnal: %d" % curTreeId )
+	_dbx( "node at finnal: %s" % curTreeId )
 	if curTreeId != None:
 		nodeAtFinal = nodeStack.peek( curTreeId )
 		nodeAtFinal.showInfo()
-	if curSta in set( [ FsmState.in_declaration ] ):
+	if curSta in set( [ FsmState.in_declaration, FsmState.start ] ):
 		_infoTs( "final state is ok")
 	else:
 		_infoTs( "WARNING: final state is unexpected!")
