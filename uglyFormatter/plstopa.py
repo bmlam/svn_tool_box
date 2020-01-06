@@ -10,7 +10,7 @@ foo = "got here"
 def _dbx ( text ):
 	global g_dbxCnt , g_dbxActive
 	if g_dbxActive :
-		print( 'dbx: %s - Ln%d: %s' % ( inspect.stack()[1][3], inspect.stack()[1][2], text ) )
+		print( 'dbx%d: %s - Ln%d: %s' % ( g_dbxCnt, inspect.stack()[1][3], inspect.stack()[1][2], text ) )
 		g_dbxCnt += 1
 		if g_dbxCnt > g_maxDbxMsg:
 			_errorExit( "g_maxDbxMsg of %d exceeded" % g_maxDbxMsg )
@@ -190,19 +190,21 @@ class TokenStack:
 		# for NOW, dump to stdout 
 		prevParent = None; textGroup= []
 		for tok in self.arr:
-			if suppressComments and tok.type in set( [TokenType.block_comment_begin, TokenType.single_line_comment_begin] ) :
-				pass
+			if "try" == "to group by tree": 
+				if suppressComments and tok.type in set( [TokenType.block_comment_begin, TokenType.single_line_comment_begin] ) :
+					pass
+				else:
+					textGroup.append( tok.text )
+					if prevParent == None: 
+						prevParent = tok.parentId
+					else: 
+						if tok.parentId == prevParent :
+							pass
+						else:
+							print( ' '.join( textGroup ) )
+							prevParent = None;	textGroup = []
 			else:
-				textGroup.append( tok.text )
-				if prevParent == None: 
-					prevParent = tok.parentId
-				else: 
-					if tok.parentId == prevParent :
-						pass
-					else:
-						print( ' '.join( textGroup ) )
-						prevParent = None;	textGroup = []
-
+				print( tok.text )
 	def peek( self, id ):
 		for elem in self.arr:
 			if elem.id == id: return elem

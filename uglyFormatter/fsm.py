@@ -164,11 +164,12 @@ def fsm( inpLines ):
 						continue # we must skip the fine-grained FSM 
 
 				elif tokTyp == TokenType.single_line_comment_begin: # found double minus 
-					if curSta == FsmState.in_single_line_comment: 
+					_dbx( foo )
+					if curSta == FsmState.find_block_comment_end: 
 						_errorExit ( "Encountered tokTyp %s while in state %s!" %( tokTyp, curSta) )
 					else: # not in wrong status, just push line comment node, no change of state 
-						stateStack.push( curSta, curTreeId )
-						node =  TokenNode( text= lnBuf, type= TokenType.single_line_comment_begin, staAtCreation= curSta, lineNo=interceptStartLineNo, colNo=interceptStartColNo, parentId= curTreeId ) 
+						node =  TokenNode( text= normed + lnBuf.rstrip("\n"), type= TokenType.single_line_comment_begin, staAtCreation= curSta, lineNo=interceptStartLineNo, colNo=interceptStartColNo, parentId= curTreeId ) 
+						nodeStack.push( node )
 						eoLine = True
 						continue
 				#

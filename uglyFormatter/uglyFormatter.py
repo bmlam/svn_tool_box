@@ -68,7 +68,7 @@ def parseCmdLine() :
 def main():
 	argParserResult = parseCmdLine()
 	tree = fsm.fsm( g_inpLines )
-	# tree.printTokenText( suppressComments= True )
+	tree.printTokenText( suppressComments= True )
 
 	# nodeA = TokenNode( 'create', 'CompileUnit', 1, 1 )
 	# nodeA.showInfo()
