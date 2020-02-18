@@ -1,6 +1,6 @@
 import enum, inspect, re , sys 
 
-g_dbxActive = True 
+g_dbxActive = False
 g_dbxCnt = 0
 g_maxDbxMsg = 99999
 

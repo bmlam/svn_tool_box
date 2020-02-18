@@ -5,7 +5,7 @@ from plstopa import FsmState, gettokentype, StateStack, TokenNode, TokenStack, T
 
 foo = "got here"
 
-g_dbxActive = True
+g_dbxActive = False
 g_dbxCnt = 0
 g_maxDbxMsg = 99600
 

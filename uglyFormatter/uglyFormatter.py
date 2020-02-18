@@ -1,44 +1,48 @@
-#!/Library/Frameworks/Python.framework/Versions/3.8/bin/python3
+#! /c/Users/bonlam/AppData/Local/Programs/Python/Python37-32/python3
 
 """ 
 on AirBook : 
 #!/usr/bin/python3
 on iMac:
 
+on Windows:
+#! /c/Users/bonlam/AppData/Local/Programs/Python/Python37-32/python3
+
 the UglyFormatter is supposed to format PLSQL solely for the purpose of providing consistent output given tbe same input
 """
 
 
-import inspect, subprocess, sys, tempfile
+import inspect, os.path, subprocess, sys, tempfile, time 
 
 ## my modules 
 import charCounter, plstopa, fsm
+from dbx import _dbx, _errorExit, _infoTs
 
-g_dbxActive = True
-g_dbxCnt = 0
-g_maxDbxMsg = 999
+#g_dbxActive = False 
+#g_dbxCnt = 0
+#g_maxDbxMsg = 999
 
 g_inpFilePath= None
 g_inpLines = ""
 g_outFilePath= None
 
-def _dbx ( text ):
-	global g_dbxCnt , g_dbxActive
-	if g_dbxActive :
-		print( 'dbx: %s - Ln%d: %s' % ( inspect.stack()[1][3], inspect.stack()[1][2], text ) )
-		g_dbxCnt += 1
-		if g_dbxCnt > g_maxDbxMsg:
-			_errorExit( "g_maxDbxMsg of %d exceeded" % g_maxDbxMsg )
+#def _dbx ( text ):
+#	global g_dbxCnt , g_dbxActive
+#	if g_dbxActive :
+#		print( 'dbx: %s - Ln%d: %s' % ( inspect.stack()[1][3], inspect.stack()[1][2], text ) )
+#		g_dbxCnt += 1
+#		if g_dbxCnt > g_maxDbxMsg:
+#			_errorExit( "g_maxDbxMsg of %d exceeded" % g_maxDbxMsg )
 
-def _infoTs ( text , withTs = False ):
-	if withTs :
-		print( '%s (Ln%d) %s' % ( time.strftime("%H:%M:%S"), inspect.stack()[1][2], text ) )
-	else :
-		print( '(Ln%d) %s' % ( inspect.stack()[1][2], text ) )
+#def _infoTs ( text , withTs = False ):
+#	if withTs :
+#		print( '%s (Ln%d) %s' % ( time.strftime("%H:%M:%S"), inspect.stack()[1][2], text ) )
+#	else :
+#		print( '(Ln%d) %s' % ( inspect.stack()[1][2], text ) )
 
-def _errorExit ( text ):
-	print( 'ERROR raised from %s - Ln%d: %s' % ( inspect.stack()[1][3], inspect.stack()[1][2], text ) )
-	sys.exit(1)
+#def _errorExit ( text ):
+#	print( 'ERROR raised from %s - Ln%d: %s' % ( inspect.stack()[1][3], inspect.stack()[1][2], text ) )
+#	sys.exit(1)
 
 def parseCmdLine() :
 	import argparse
@@ -90,30 +94,39 @@ def genUnixDiff ( oldPath, newPath, recursive= False ):
     _dbx(  len( unixOutMsgs ) )
     return unixOutMsgs
 
+def mixedDosPathToUnix ( path ):
+  if path[1] == ":":
+    drive = path[0]
+    return '/' + drive + '/' + path[3:]
+  else:
+    return path 
+
+def persistAndPrintName( textName, textContent, baseNamePrefix ):
+  outPath = tempfile.mktemp()
+  if baseNamePrefix != None:
+    tempDirName  = os.path.dirname( outPath )
+    tempBaseName = os.path.basename( outPath )
+    outPath = os.path.join( tempDirName, baseNamePrefix + tempBaseName )
+    
+  _infoTs( "Text named '%s' will be written to %s" % ( textName, mixedDosPathToUnix(outPath) ), withTs= True )
+  fh = open( outPath, "w")
+  fh.write( "\n".join(textContent ) ) 
+
 def main():
 	global g_fsmInitStatusCode
 	argParserResult = parseCmdLine()
 
-	# nodeA = TokenNode( 'create', 'CompileUnit', 1, 1 )
-	# nodeA.showInfo()
-
-	# stack1 = TokenStack( ); stack1.showInfo()
-	# stack1.push (nodeA); stack1.showInfo()
-
-	#tree = fsm.fsm( g_inpLines )
-	# tree.printTokenText( suppressComments= True )
-
 	if True:
 		tree = fsm.plsqlTokenize( g_inpLines )
-		outLines = tree.simpleFormatSemicolonAware()
-		# print( "\n".join( outLines ) )
+		formattedLines = tree.simpleFormatSemicolonAware()
+		# print( "\n".join( formattedLines ) )
 
-	if True or "want to" == "compare output manually":
+	if False or "want to" == "compare output manually":
 		#print( "*"*20 + "input sql" + "*"*20 )
 		#print( "".join( g_inpLines))
 		
 		print( "*"*20 + "formatted" + "*"*20 )
-		print( "\n".join( outLines))
+		print( "\n".join( formattedLines))
 		
 	if "want to compare" == "char count":
 		forCharCountCheck_A = tempfile.mktemp()
@@ -124,7 +137,7 @@ def main():
 
 		forCharCountCheck_B = tempfile.mktemp()
 		_dbx ( "forCharCountCheck_B: %s" % (forCharCountCheck_B ))
-		charCounter_B = charCounter.TextCharStatsIgnoreCase( textName = "formatted output", txt = outLines)
+		charCounter_B = charCounter.TextCharStatsIgnoreCase( textName = "formatted output", txt = formattedLines)
 		charCountResultLines_B = charCounter_B.report( printToStdout= False )
 		open( forCharCountCheck_B, "w").write( "\n".join( charCountResultLines_B ) )
 
@@ -142,7 +155,7 @@ def main():
 		_dbx ( "forWordCountCheck_a: %s" % (forWordCountCheck_a ))
 		open( forWordCountCheck_a, "w").write( "\n".join( wordCountResultLines_a ) )
 
-		textWordCounter_b = charCounter.WordCounter( name="sql input" , lines= outLines, shortCode= "sqlInput" )
+		textWordCounter_b = charCounter.WordCounter( name="sql input" , lines= formattedLines, shortCode= "sqlInput" )
 		textWordCounter_b.scan()
 		wordCountResultLines_b = textWordCounter_b.report( printToStdout= False )
 		forWordCountCheck_b = tempfile.mktemp()
@@ -155,6 +168,7 @@ def main():
 		_infoTs( " ************ result of DIFFing WORD Counts")
 		print( diffWordCountResult ) 
 
+		persistAndPrintName( textName= "formatted %s" % argParserResult.inFile, textContent= formattedLines, baseNamePrefix=argParserResult.inFile+'-' )
 
 	if "want to " == "use fsmMain":
 		commentStack, signifStack = plstopa.separateCommentsFromSignficants( tree )
